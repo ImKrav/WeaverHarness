@@ -116,6 +116,8 @@ func New(name, bin string) (Provider, error) {
 		return newClaude(bin), nil
 	case "codex":
 		return newCodex(bin), nil
+	case "antigravity":
+		return newAgy(bin), nil
 	case "opencode":
 		return newOpenCode(bin), nil
 	default:

@@ -39,6 +39,11 @@ func main() {
 		return
 	}
 
+	if os.Getenv("FAKECLI_ACP") == "1" {
+		runACP()
+		return
+	}
+
 	if stdinPath := os.Getenv("FAKECLI_STDIN"); stdinPath != "" {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -135,4 +140,86 @@ func extractUserContent(line string) string {
 		return payload.Message.Content
 	}
 	return line
+}
+
+func runACP() {
+	var stdinOut *os.File
+	if stdinPath := os.Getenv("FAKECLI_STDIN"); stdinPath != "" {
+		var err error
+		stdinOut, err = os.Create(stdinPath)
+		if err != nil {
+			os.Exit(95)
+		}
+		defer stdinOut.Close()
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			if stdinOut != nil {
+				_, _ = stdinOut.Write(line)
+			}
+			trimmed := strings.TrimRight(string(line), "\r\n")
+			if trimmed != "" {
+				var req struct {
+					ID     any            `json:"id"`
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
+				}
+				if json.Unmarshal([]byte(trimmed), &req) == nil {
+					switch req.Method {
+					case "initialize":
+						b, _ := json.Marshal(map[string]any{
+							"jsonrpc": "2.0",
+							"id":      req.ID,
+							"result":  map[string]any{"protocolVersion": 1},
+						})
+						fmt.Println(string(b))
+					case "session/new":
+						b, _ := json.Marshal(map[string]any{
+							"jsonrpc": "2.0",
+							"id":      req.ID,
+							"result":  map[string]any{"sessionId": "d1de2822-a530-4715-b41b-4c94f809da2b"},
+						})
+						fmt.Println(string(b))
+					case "session/resume":
+						sid, _ := req.Params["sessionId"].(string)
+						b, _ := json.Marshal(map[string]any{
+							"jsonrpc": "2.0",
+							"id":      req.ID,
+							"result":  map[string]any{"sessionId": sid},
+						})
+						fmt.Println(string(b))
+					case "session/set_model":
+						if os.Getenv("FAKECLI_ACP_BAD_MODEL") == "1" {
+							b, _ := json.Marshal(map[string]any{
+								"jsonrpc": "2.0",
+								"id":      req.ID,
+								"error":   map[string]any{"code": -32602, "message": "Unknown model ID: bad-model"},
+							})
+							fmt.Println(string(b))
+							return
+						}
+						b, _ := json.Marshal(map[string]any{
+							"jsonrpc": "2.0",
+							"id":      req.ID,
+							"result":  map[string]any{},
+						})
+						fmt.Println(string(b))
+					case "session/prompt":
+						if fixPath := os.Getenv("FAKECLI_FIXTURE"); fixPath != "" {
+							if f, openErr := os.Open(fixPath); openErr == nil {
+								_, _ = io.Copy(os.Stdout, f)
+								_ = f.Close()
+							}
+						}
+					}
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
 }

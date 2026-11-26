@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"d1de2822-a530-4715-b41b-4c94f809da2b","update":{"sessionUpdate":"tool_call","toolCallId":"call_7008398241754701218","name":"write_file","status":"in_progress","kind":"edit"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"d1de2822-a530-4715-b41b-4c94f809da2b","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Se ha creado "}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"d1de2822-a530-4715-b41b-4c94f809da2b","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hola.txt"}}}}
+{"jsonrpc":"2.0","result":{"stopReason":"end_turn","usage":{"inputTokens":24211,"outputTokens":302,"totalTokens":44378}},"id":4}
