@@ -1,0 +1,28 @@
+orchestrator = "architect"
+review_rounds = 2
+check_timeout = "10m"
+task_timeout = "30m"
+
+[roles.architect]
+provider = "claude"
+model = "opus"
+
+[roles.implementer]
+provider = "antigravity"
+model = "gemini-4-hydrogen"
+
+[roles.reviewer]
+provider = "codex"
+model = "gpt-5.6-sol"
+
+[providers.claude]
+max_parallel = 3
+
+[providers.codex]
+max_parallel = 3
+
+[providers.antigravity]
+max_parallel = 3
+
+[providers.opencode]
+max_parallel = 3
