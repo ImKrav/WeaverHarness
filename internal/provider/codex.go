@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -47,20 +45,9 @@ func (c *codexProvider) Start(ctx context.Context, req RunRequest) (Run, error) 
 		return nil, errors.New("v1: solo claude puede ser orquestador")
 	}
 
-	prompt := req.Prompt
-	if req.SystemPromptFile != "" {
-		sysBytes, err := os.ReadFile(req.SystemPromptFile)
-		if err != nil {
-			return nil, &ProviderError{Class: Crashed, Msg: fmt.Sprintf("leyendo system prompt: %v", err)}
-		}
-		sysText := strings.TrimSpace(string(sysBytes))
-		if sysText != "" {
-			if prompt != "" {
-				prompt = sysText + "\n\n" + prompt
-			} else {
-				prompt = sysText
-			}
-		}
+	prompt, err := prependSystemPrompt(req.Prompt, req.SystemPromptFile)
+	if err != nil {
+		return nil, err
 	}
 
 	args := buildCodexArgs(req)

@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 )
 
 // ErrClass categorizes provider execution failures without inspecting vendor internals.
@@ -114,7 +116,27 @@ func New(name, bin string) (Provider, error) {
 		return newClaude(bin), nil
 	case "codex":
 		return newCodex(bin), nil
+	case "opencode":
+		return newOpenCode(bin), nil
 	default:
 		return nil, fmt.Errorf("provider: proveedor desconocido %q", name)
 	}
+}
+
+func prependSystemPrompt(prompt, systemPromptFile string) (string, error) {
+	if systemPromptFile == "" {
+		return prompt, nil
+	}
+	sysBytes, err := os.ReadFile(systemPromptFile)
+	if err != nil {
+		return "", &ProviderError{Class: Crashed, Msg: fmt.Sprintf("leyendo system prompt: %v", err)}
+	}
+	sysText := strings.TrimSpace(string(sysBytes))
+	if sysText == "" {
+		return prompt, nil
+	}
+	if prompt == "" {
+		return sysText, nil
+	}
+	return sysText + "\n\n" + prompt, nil
 }
