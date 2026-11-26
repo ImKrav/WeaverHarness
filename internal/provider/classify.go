@@ -21,6 +21,7 @@ var (
 		"unknown model",
 		"model not found",
 		"invalid model",
+		"model is not supported",
 	}
 )
 

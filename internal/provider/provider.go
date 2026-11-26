@@ -112,6 +112,8 @@ func New(name, bin string) (Provider, error) {
 	switch name {
 	case "claude":
 		return newClaude(bin), nil
+	case "codex":
+		return newCodex(bin), nil
 	default:
 		return nil, fmt.Errorf("provider: proveedor desconocido %q", name)
 	}

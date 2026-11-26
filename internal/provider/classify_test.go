@@ -17,6 +17,7 @@ func TestClassify(t *testing.T) {
 		{name: "unknown model", text: "Error: Unknown model foo-bar", want: ModelUnknown},
 		{name: "model not found", text: "model not found: x", want: ModelUnknown},
 		{name: "invalid model", text: "Invalid model specified", want: ModelUnknown},
+		{name: "codex model not supported", text: "The 'modelo-inexistente' model is not supported when using Codex with a ChatGPT account.", want: ModelUnknown},
 		{name: "fallback crashed", text: "unexpected segmentation fault", want: Crashed},
 		{name: "empty string", text: "", want: Crashed},
 	}
