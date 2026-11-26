@@ -13,6 +13,7 @@ WeaverHarness **no usa APIs ni toca credenciales**. Solo lanza los CLIs oficiale
 En diseño. Aún no hay código.
 
 - Diseño: [docs/superpowers/specs/2026-11-26-weaverharness-design.md](docs/superpowers/specs/2026-11-26-weaverharness-design.md)
+- Plan v1: [docs/superpowers/plans/2026-11-26-weaverharness-v1.md](docs/superpowers/plans/2026-11-26-weaverharness-v1.md)
 
 ## Requisitos (previstos)
 

@@ -289,4 +289,13 @@ Comandos: `weaver` (abre la TUI en el repo actual), `weaver resume [run-id]`, `w
 
 **Propuesto por mí (se puede corregir):** no usar Agent SDK; solo Claude como orquestador en v1; dos niveles de jerarquía; los subagentes sin MCP y con el recibo en el mensaje final; worktrees fuera del repo; rama de integración por ejecución y merge solo fast-forward tras la aprobación; auto-commit de cambios pendientes; `spawn_agent` bloqueado hasta que el plan esté aprobado; `accept_task` obligatorio y aprobación final bloqueada hasta que todas las tareas estén aceptadas y pasen los `global_checks`; el orquestador no escribe código (§5.3.1); alcance de ejecución y sesión (§5.3.2); restaurar refs ajenas en vez de solo avisar; v1 sin `agy` si el spike falla; reasignación por cuota decidida por el orquestador; Bubble Tea; TOML; timeouts y límites por defecto.
 
+**Ajustes hechos al planificar** (ver `docs/superpowers/plans/2026-11-26-weaverharness-v1.md`):
+- Permisos del orquestador: lista fija de herramientas con `--permission-mode dontAsk`. No hay peticiones de permiso que mostrar en la TUI; lo denegado aparece como error en el chat.
+- La guardia de refs protege todo lo que está fuera de `refs/heads/weaver/`. No detecta que un agente mueva otra rama `weaver/`. Un cambio del HEAD de otro worktree se reporta, pero no se restaura.
+- `.weaver/` se excluye vía `.git/info/exclude`, no `.gitignore`, para no ensuciar el árbol del usuario.
+- La ejecución se crea al abrir la sesión (necesita el worktree del orquestador) y, si queda vacía, se borra al salir. El comportamiento visible es el mismo que en §5.3.2.
+- `spawn_agent` exige que las dependencias estén aceptadas **y** ya mergeadas en `weaver/<run-id>`. El agente arranca desde la punta de esa rama.
+- El plan exige al menos un check por tarea y al menos un `global_check`.
+- Si un proveedor está en `max_parallel`, `spawn_agent` encola (`queued`) en vez de rechazar.
+
 **Queda al constructor:** el protocolo exacto de cada adaptador dentro de lo de §5.2 (incluido el spike de `agy`); el mecanismo de permisos del orquestador (§5.7); el uso de flags de esquema nativos para el recibo; la librería MCP de Go (preferible el SDK oficial `modelcontextprotocol/go-sdk`); la estructura de paquetes; el texto de los prompts embebidos.
