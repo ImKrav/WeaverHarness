@@ -523,3 +523,100 @@ func TestWaitCancel(t *testing.T) {
 		t.Fatalf("Wait() = %+v", res)
 	}
 }
+
+func TestSpawnDepAfterCleanup(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	st := run.Store{Root: filepath.Join(r.Dir, ".weaver", "runs")}
+	app := &fakeApprover{approved: true}
+
+	prov := &fakeProvider{
+		name: "codex",
+		handler: func(call int, ctx context.Context, req provider.RunRequest) (provider.Run, error) {
+			name := "step1.txt"
+			taskID := "T1"
+			if call > 1 {
+				name = "step2.txt"
+				taskID = "T2"
+			}
+			if err := os.WriteFile(filepath.Join(req.Dir, name), []byte("ok\n"), 0o644); err != nil {
+				return nil, err
+			}
+			wt, err := gitx.Open(req.Dir)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := wt.CommitAll(ctx, "add "+name); err != nil {
+				return nil, err
+			}
+			sha, err := wt.RevParse(ctx, "HEAD")
+			if err != nil {
+				return nil, err
+			}
+			return newFakeRun("sid", []string{`{"ok":1}`}, provider.Final{
+				Text:      receiptBlock(taskID, "done", name, []string{sha}, "echo ok"),
+				SessionID: "sid",
+			}), nil
+		},
+	}
+
+	eng, err := New(ctx, Options{
+		Cfg:       testConfig(),
+		Repo:      r,
+		Store:     st,
+		Providers: map[string]provider.Provider{"codex": prov},
+		Approver:  app,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = eng.Close(context.Background())
+	})
+
+	if _, err := eng.StartRun(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := eng.RequestApproval(ctx, ApprovalRequest{Kind: "spec", Path: "docs/spec.md", Summary: "s"}); err != nil || !ok {
+		t.Fatal(err)
+	}
+	plan := &run.Plan{
+		Tasks: []*run.Task{
+			{ID: "T1", Title: "Base", Role: "implementer", SpecRefs: []string{"REQ-1"}, Checks: []string{"echo ok"}},
+			{ID: "T2", Title: "Dependent", Role: "implementer", SpecRefs: []string{"REQ-1"}, DependsOn: []string{"T1"}, Checks: []string{"echo ok"}},
+		},
+		GlobalChecks: []string{"echo ok"},
+	}
+	if ok, _, err := eng.RequestApproval(ctx, ApprovalRequest{Kind: "plan", Path: "docs/plan.md", Summary: "p", Plan: plan}); err != nil || !ok {
+		t.Fatal(err)
+	}
+
+	a1, err := eng.Spawn(ctx, "T1", "", "", "", "step1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = eng.Wait(ctx, []string{a1}, 10*time.Second)
+	if err := eng.AcceptTask(ctx, "T1", a1); err != nil {
+		t.Fatalf("AcceptTask(T1): %v", err)
+	}
+
+	sessRepo, err := gitx.Open(eng.State().SessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessRepo.MergeFFOnly(ctx, eng.State().Agent(a1).Branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Cleanup(ctx, a1); err != nil {
+		t.Fatalf("Cleanup(a1): %v", err)
+	}
+
+	a2, err := eng.Spawn(ctx, "T2", "", "", "", "step2")
+	if err != nil {
+		t.Fatalf("Spawn(T2) after Cleanup(a1) failed: %v", err)
+	}
+	res := eng.Wait(ctx, []string{a2}, 10*time.Second)
+	if len(res) != 1 || res[0].Status != string(run.AgentFinished) {
+		t.Fatalf("T2 Wait() = %+v", res)
+	}
+}

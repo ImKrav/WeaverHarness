@@ -27,11 +27,10 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 
 	mergedFn := func(agentID string) bool {
 		ag := e.state.Agent(agentID)
-		if ag == nil || ag.Branch == "" {
+		if ag == nil {
 			return false
 		}
-		ok, err := e.repo.IsAncestor(ctx, ag.Branch, e.state.IntegrationBranch)
-		return err == nil && ok
+		return e.isAgentMerged(ctx, ag.Branch, ag.MergedCommit, e.state.IntegrationBranch)
 	}
 	if err := e.state.CheckSpawn(taskID, mergedFn); err != nil {
 		e.mu.Unlock()
@@ -772,10 +771,39 @@ func (e *Engine) Cleanup(ctx context.Context, agentID string) error {
 	if !merged {
 		return fmt.Errorf("engine: la rama %s aún no está mergeada en %s", branch, integBranch)
 	}
+	headSHA, err := e.repo.RevParse(ctx, branch)
+	if err != nil {
+		return fmt.Errorf("engine: resolviendo HEAD de %s: %w", branch, err)
+	}
+
+	e.mu.Lock()
+	if cur := e.state.Agent(agentID); cur != nil {
+		cur.MergedCommit = headSHA
+		if err := e.store.Save(e.state); err != nil {
+			e.mu.Unlock()
+			return err
+		}
+	}
+	e.mu.Unlock()
+
 	if err := e.repo.RemoveWorktree(ctx, worktree); err != nil {
 		return err
 	}
 	return e.repo.DeleteBranch(ctx, branch)
+}
+
+func (e *Engine) isAgentMerged(ctx context.Context, branch, mergedCommit, integBranch string) bool {
+	if branch != "" {
+		if ok, err := e.repo.IsAncestor(ctx, branch, integBranch); err == nil && ok {
+			return true
+		}
+	}
+	if mergedCommit != "" {
+		if ok, err := e.repo.IsAncestor(ctx, mergedCommit, integBranch); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSONFile(path string, v any) error {

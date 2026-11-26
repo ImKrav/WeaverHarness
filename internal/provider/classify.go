@@ -6,6 +6,7 @@ var (
 	quotaPatterns = []string{
 		"usage limit",
 		"rate limit",
+		"hour limit",
 		"quota",
 		"exhausted",
 		"429",

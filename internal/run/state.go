@@ -68,9 +68,10 @@ type Agent struct {
 	Role      string      `json:"role"`
 	Provider  string      `json:"provider"`
 	Model     string      `json:"model"`
-	Branch    string      `json:"branch"`
-	Base      string      `json:"base"`
-	Worktree  string      `json:"worktree"`
+	Branch       string      `json:"branch"`
+	Base         string      `json:"base"`
+	MergedCommit string      `json:"merged_commit,omitempty"`
+	Worktree     string      `json:"worktree"`
 	SessionID string      `json:"session_id,omitempty"`
 	Err       string      `json:"err,omitempty"`
 	Status    AgentStatus `json:"status"`

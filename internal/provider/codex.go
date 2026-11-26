@@ -67,7 +67,7 @@ func buildCodexArgs(req RunRequest) []string {
 		if req.Model != "" {
 			args = append(args, "-m", req.Model)
 		}
-		args = append(args, "-c", `approval_policy="never"`, req.ResumeID, "-")
+		args = append(args, "-c", `approval_policy="never"`, "-c", `sandbox_mode="danger-full-access"`, req.ResumeID, "-")
 		return args
 	}
 
@@ -78,7 +78,7 @@ func buildCodexArgs(req RunRequest) []string {
 	if req.Dir != "" {
 		args = append(args, "-C", req.Dir)
 	}
-	args = append(args, "-s", "workspace-write", "-c", `approval_policy="never"`, "-")
+	args = append(args, "-s", "danger-full-access", "-c", `approval_policy="never"`, "-")
 	return args
 }
 

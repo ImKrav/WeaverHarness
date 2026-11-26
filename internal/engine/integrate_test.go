@@ -245,3 +245,35 @@ func TestNextRunAfterIntegration(t *testing.T) {
 		t.Fatalf("next IntegrationBranch HEAD = %s, want updated main %s", nextHead, mainSHA)
 	}
 }
+
+func TestIntegrationAfterCleanup(t *testing.T) {
+	ctx := context.Background()
+	eng, r, _, _ := setupAcceptedTaskInEngine(t, []string{"echo ok"}, true)
+
+	acceptedAgent := eng.State().Task("T1").AcceptedAgent
+	if err := eng.Cleanup(ctx, acceptedAgent); err != nil {
+		t.Fatalf("Cleanup() error: %v", err)
+	}
+
+	integSHA, err := r.RevParse(ctx, eng.State().IntegrationBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approved, _, err := eng.RequestApproval(ctx, ApprovalRequest{
+		Kind:    "integration",
+		Path:    "docs/plan.md",
+		Summary: "merge",
+	})
+	if err != nil || !approved {
+		t.Fatalf("RequestApproval(integration) after Cleanup = (%v, %v), want (true, nil)", approved, err)
+	}
+
+	mainSHA, err := r.RevParse(ctx, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mainSHA != integSHA {
+		t.Fatalf("main = %s, want %s after fast-forward", mainSHA, integSHA)
+	}
+}

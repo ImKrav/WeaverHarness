@@ -30,8 +30,9 @@ func (e *Engine) checkIntegration(ctx context.Context) error {
 	timeout := e.cfg.CheckTimeout.Duration
 
 	type taskCheck struct {
-		id     string
-		branch string
+		id           string
+		branch       string
+		mergedCommit string
 	}
 	var toVerify []taskCheck
 	var missing []string
@@ -41,17 +42,16 @@ func (e *Engine) checkIntegration(ctx context.Context) error {
 			continue
 		}
 		ag := e.state.Agent(t.AcceptedAgent)
-		if ag == nil || ag.Branch == "" {
+		if ag == nil || (ag.Branch == "" && ag.MergedCommit == "") {
 			missing = append(missing, t.ID)
 			continue
 		}
-		toVerify = append(toVerify, taskCheck{id: t.ID, branch: ag.Branch})
+		toVerify = append(toVerify, taskCheck{id: t.ID, branch: ag.Branch, mergedCommit: ag.MergedCommit})
 	}
 	e.mu.Unlock()
 
 	for _, tc := range toVerify {
-		ok, err := e.repo.IsAncestor(ctx, tc.branch, integBranch)
-		if err != nil || !ok {
+		if !e.isAgentMerged(ctx, tc.branch, tc.mergedCommit, integBranch) {
 			missing = append(missing, tc.id)
 		}
 	}

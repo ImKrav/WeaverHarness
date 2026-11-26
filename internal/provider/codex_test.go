@@ -64,7 +64,7 @@ func TestCodexArgs(t *testing.T) {
 		"--json",
 		"-m", "gpt-5.6-sol",
 		"-C", dir,
-		"-s", "workspace-write",
+		"-s", "danger-full-access",
 		"-c", `approval_policy="never"`,
 		"-",
 	}
@@ -105,6 +105,7 @@ func TestCodexResumeArgs(t *testing.T) {
 		"--json",
 		"-m", "gpt-5.6-sol",
 		"-c", `approval_policy="never"`,
+		"-c", `sandbox_mode="danger-full-access"`,
 		"01a21670-5dc0-7ff1-b6c8-970699aa9d17",
 		"-",
 	}
