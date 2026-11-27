@@ -63,20 +63,26 @@ type Plan struct {
 
 // Agent holds runtime metadata for one subagent invocation.
 type Agent struct {
-	ID        string      `json:"id"`
-	TaskID    string      `json:"task_id"`
-	Role      string      `json:"role"`
-	Provider  string      `json:"provider"`
-	Model     string      `json:"model"`
-	Branch       string      `json:"branch"`
-	Base         string      `json:"base"`
-	MergedCommit string      `json:"merged_commit,omitempty"`
-	Worktree     string      `json:"worktree"`
-	SessionID string      `json:"session_id,omitempty"`
-	Err       string      `json:"err,omitempty"`
-	Status    AgentStatus `json:"status"`
-	StartedAt time.Time   `json:"started_at"`
-	EndedAt   time.Time   `json:"ended_at,omitempty"`
+	ID               string      `json:"id"`
+	TaskID           string      `json:"task_id"`
+	Role             string      `json:"role"`
+	Provider         string      `json:"provider"`
+	Model            string      `json:"model"`
+	Branch           string      `json:"branch"`
+	Base             string      `json:"base"`
+	MergedCommit     string      `json:"merged_commit,omitempty"`
+	Worktree         string      `json:"worktree"`
+	SessionID        string      `json:"session_id,omitempty"`
+	Err              string      `json:"err,omitempty"`
+	Status           AgentStatus `json:"status"`
+	StartedAt        time.Time   `json:"started_at"`
+	EndedAt          time.Time   `json:"ended_at,omitempty"`
+	ActiveDurationMS int64       `json:"active_duration_ms,omitempty"`
+	FollowUps        int         `json:"follow_ups,omitempty"`
+	ReceiptRetries   int         `json:"receipt_retries,omitempty"`
+	ChecksPassed     int         `json:"checks_passed,omitempty"`
+	ChecksFailed     int         `json:"checks_failed,omitempty"`
+	RefViolations    int         `json:"ref_violations,omitempty"`
 }
 
 // Approval records one human approval or rejection decision.

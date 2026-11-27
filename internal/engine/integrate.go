@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ImKrav/weaverharness/internal/run"
 	"github.com/ImKrav/weaverharness/internal/verify"
@@ -87,30 +88,52 @@ func (e *Engine) afterIntegration(ctx context.Context) (string, error) {
 	}
 	baseBranch := e.state.BaseBranch
 	integBranch := e.state.IntegrationBranch
+	metrics := run.Summarize(e.state)
 	e.mu.Unlock()
+
+	summaryLine := fmt.Sprintf(
+		"\nResumen: %d/%d tareas aceptadas, %d agentes, duración activa %s (wall %s).",
+		metrics.AcceptedTasks,
+		metrics.TotalTasks,
+		metrics.TotalAgents,
+		formatMetricDuration(metrics.ActiveDuration),
+		formatMetricDuration(metrics.WallDuration),
+	)
 
 	curBranch, err := e.repo.CurrentBranch(ctx)
 	if err != nil || curBranch != baseBranch {
 		return fmt.Sprintf(
-			"La rama actual del repositorio es %q (se esperaba %q); no se modificó el repo principal. Integra manualmente: git merge %s",
+			"La rama actual del repositorio es %q (se esperaba %q); no se modificó el repo principal. Integra manualmente: git merge %s%s",
 			curBranch,
 			baseBranch,
 			integBranch,
+			summaryLine,
 		), nil
 	}
 
 	if err := e.repo.MergeFFOnly(ctx, integBranch); err != nil {
 		return fmt.Sprintf(
-			"No se pudo hacer fast-forward de %s sobre %s (%v); el repo principal quedó intacto. Integra manualmente: git merge %s",
+			"No se pudo hacer fast-forward de %s sobre %s (%v); el repo principal quedó intacto. Integra manualmente: git merge %s%s",
 			integBranch,
 			baseBranch,
 			err,
 			integBranch,
+			summaryLine,
 		), nil
 	}
 
 	if err := e.guard.Rebase(ctx); err != nil {
 		return "", fmt.Errorf("engine: actualizando guardia tras fast-forward: %w", err)
 	}
-	return fmt.Sprintf("Integración aplicada: fast-forward de %s en %s.", integBranch, baseBranch), nil
+	return fmt.Sprintf("Integración aplicada: fast-forward de %s en %s.%s", integBranch, baseBranch, summaryLine), nil
+}
+
+func formatMetricDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	if d < time.Second {
+		return d.Truncate(time.Millisecond).String()
+	}
+	return d.Truncate(time.Second).String()
 }

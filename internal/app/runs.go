@@ -5,6 +5,7 @@ import (
 	"io"
 	"path/filepath"
 	"text/tabwriter"
+	"time"
 
 	"github.com/ImKrav/weaverharness/internal/gitx"
 	"github.com/ImKrav/weaverharness/internal/run"
@@ -30,13 +31,24 @@ func Runs(dir string, out io.Writer) error {
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "RUN ID\tFASE\tRAMA\tTAREAS\tAGENTES")
+	fmt.Fprintln(tw, "RUN ID\tFASE\tRAMA\tTAREAS\tAGENTES\tDURACIÓN")
 	for _, s := range list {
 		taskCount := 0
 		if s.Plan != nil {
 			taskCount = len(s.Plan.Tasks)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\n", s.RunID, s.Phase, s.IntegrationBranch, taskCount, len(s.Agents))
+		dur := "-"
+		if len(s.Agents) > 0 {
+			m := run.Summarize(s)
+			if m.ActiveDuration > 0 {
+				if m.ActiveDuration < time.Second {
+					dur = m.ActiveDuration.Truncate(time.Millisecond).String()
+				} else {
+					dur = m.ActiveDuration.Truncate(time.Second).String()
+				}
+			}
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\n", s.RunID, s.Phase, s.IntegrationBranch, taskCount, len(s.Agents), dur)
 	}
 	return tw.Flush()
 }

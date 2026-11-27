@@ -226,6 +226,7 @@ func (e *Engine) FollowUp(ctx context.Context, agentID, msg string) error {
 	ag.Status = run.AgentQueued
 	ag.Err = ""
 	ag.EndedAt = time.Time{}
+	ag.FollowUps++
 	if err := e.store.Save(e.state); err != nil {
 		e.mu.Unlock()
 		return err
@@ -314,7 +315,9 @@ func (e *Engine) runAgent(
 	e.notify(prog)
 
 	agentDir := e.store.AgentDir(runID, agentID)
+	execStart := time.Now()
 	final, cancelled, err := e.executeProvider(runCtx, agentID, p, req, agentDir)
+	e.recordAgentDuration(agentID, time.Since(execStart))
 	if cancelled || e.isCancelled(agentID) {
 		e.markCancelled(agentID)
 		return
@@ -351,6 +354,7 @@ func (e *Engine) runAgent(
 	// Step 2: extract and validate receipt, retrying once on miss/invalid without counting a round.
 	rec, recErr := extractAndValidate(final.Text, taskID)
 	if recErr != nil {
+		e.incrementReceiptRetries(agentID)
 		retryReq := provider.RunRequest{
 			Mode:     provider.Worker,
 			Dir:      worktree,
@@ -358,7 +362,9 @@ func (e *Engine) runAgent(
 			Prompt:   prompts.ReceiptRetry(e.repo.Dir),
 			ResumeID: final.SessionID,
 		}
+		retryStart := time.Now()
 		retryFinal, retryCancelled, retryStartErr := e.executeProvider(runCtx, agentID, p, retryReq, agentDir)
+		e.recordAgentDuration(agentID, time.Since(retryStart))
 		if retryCancelled || e.isCancelled(agentID) {
 			e.markCancelled(agentID)
 			return
@@ -429,12 +435,24 @@ func (e *Engine) runAgent(
 	_ = writeJSONFile(filepath.Join(agentDir, "receipt.json"), rec)
 	_ = writeJSONFile(filepath.Join(agentDir, "verification.json"), ver)
 
+	var passedChecks, failedChecks int
+	for _, c := range ver.Checks {
+		if c.Passed {
+			passedChecks++
+		} else {
+			failedChecks++
+		}
+	}
+
 	updated := false
 	e.mu.Lock()
 	if e.state != nil {
 		if a := e.state.Agent(agentID); a != nil {
 			a.Status = run.AgentFinished
 			a.EndedAt = time.Now().UTC()
+			a.ChecksPassed += passedChecks
+			a.ChecksFailed += failedChecks
+			a.RefViolations += len(ver.RefViolations)
 		}
 		rOK := rec.Status == "done"
 		vOK := ver.Passed
@@ -457,6 +475,27 @@ func (e *Engine) runAgent(
 		e.notify(infos)
 		e.notify(prog)
 	}
+}
+
+func (e *Engine) recordAgentDuration(agentID string, d time.Duration) {
+	ms := max(int64(1), d.Milliseconds())
+	e.mu.Lock()
+	if e.state != nil {
+		if a := e.state.Agent(agentID); a != nil {
+			a.ActiveDurationMS += ms
+		}
+	}
+	e.mu.Unlock()
+}
+
+func (e *Engine) incrementReceiptRetries(agentID string) {
+	e.mu.Lock()
+	if e.state != nil {
+		if a := e.state.Agent(agentID); a != nil {
+			a.ReceiptRetries++
+		}
+	}
+	e.mu.Unlock()
 }
 
 func (e *Engine) cleanupCancelledQueued(agentID string) {
