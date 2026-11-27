@@ -26,12 +26,12 @@ func Runs(dir string, out io.Writer) error {
 		return err
 	}
 	if len(list) == 0 {
-		fmt.Fprintln(out, "No hay ejecuciones guardadas.")
+		_, _ = fmt.Fprintln(out, "No hay ejecuciones guardadas.")
 		return nil
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "RUN ID\tFASE\tRAMA\tTAREAS\tAGENTES\tDURACIÓN")
+	_, _ = fmt.Fprintln(tw, "RUN ID\tFASE\tRAMA\tTAREAS\tAGENTES\tDURACIÓN")
 	for _, s := range list {
 		taskCount := 0
 		if s.Plan != nil {
@@ -48,7 +48,7 @@ func Runs(dir string, out io.Writer) error {
 				}
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\n", s.RunID, s.Phase, s.IntegrationBranch, taskCount, len(s.Agents), dur)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\n", s.RunID, s.Phase, s.IntegrationBranch, taskCount, len(s.Agents), dur)
 	}
 	return tw.Flush()
 }

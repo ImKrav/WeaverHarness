@@ -548,11 +548,12 @@ func (e *Engine) Close(ctx context.Context) error {
 	}
 	e.baseCancel()
 
+waitLoop:
 	for _, ch := range waitChs {
 		select {
 		case <-ch:
 		case <-ctx.Done():
-			break
+			break waitLoop
 		}
 	}
 

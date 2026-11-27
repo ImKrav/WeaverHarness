@@ -139,30 +139,30 @@ func Clean(ctx context.Context, o CleanOptions) error {
 	}
 
 	if len(targetWorktrees) == 0 && len(targetBranches) == 0 && len(targetRuns) == 0 {
-		fmt.Fprintln(out, "No hay nada que limpiar.")
+		_, _ = fmt.Fprintln(out, "No hay nada que limpiar.")
 		return nil
 	}
 
 	if o.DryRun {
-		fmt.Fprintln(out, "Plan de limpieza (--dry-run):")
+		_, _ = fmt.Fprintln(out, "Plan de limpieza (--dry-run):")
 		for _, wt := range targetWorktrees {
-			fmt.Fprintf(out, "  - Worktree: %s\n", wt.Path)
+			_, _ = fmt.Fprintf(out, "  - Worktree: %s\n", wt.Path)
 		}
 		for _, br := range targetBranches {
-			fmt.Fprintf(out, "  - Rama: %s\n", br)
+			_, _ = fmt.Fprintf(out, "  - Rama: %s\n", br)
 		}
 		for _, st := range targetRuns {
-			fmt.Fprintf(out, "  - Run: %s (%s)\n", st.RunID, st.Phase)
+			_, _ = fmt.Fprintf(out, "  - Run: %s (%s)\n", st.RunID, st.Phase)
 		}
 		return nil
 	}
 
 	if o.All && !o.Force {
-		fmt.Fprintf(out, "¿Eliminar también %d ejecuciones abiertas y todos los worktrees de weaver? [s/N] ", len(openRuns))
+		_, _ = fmt.Fprintf(out, "¿Eliminar también %d ejecuciones abiertas y todos los worktrees de weaver? [s/N] ", len(openRuns))
 		line, _ := bufio.NewReader(in).ReadString('\n')
 		ans := strings.ToLower(strings.TrimSpace(line))
 		if ans != "s" && ans != "si" && ans != "sí" && ans != "y" && ans != "yes" {
-			fmt.Fprintln(out, "Limpieza cancelada.")
+			_, _ = fmt.Fprintln(out, "Limpieza cancelada.")
 			return nil
 		}
 	}
@@ -173,7 +173,7 @@ func Clean(ctx context.Context, o CleanOptions) error {
 				return fmt.Errorf("clean: eliminando worktree %s: %w", wt.Path, err)
 			}
 		}
-		fmt.Fprintf(out, "Worktree eliminado: %s\n", wt.Path)
+		_, _ = fmt.Fprintf(out, "Worktree eliminado: %s\n", wt.Path)
 	}
 
 	if err := repo.PruneWorktrees(ctx); err != nil {
@@ -198,14 +198,14 @@ func Clean(ctx context.Context, o CleanOptions) error {
 		if err := repo.DeleteBranch(ctx, br); err != nil {
 			return fmt.Errorf("clean: eliminando rama %s: %w", br, err)
 		}
-		fmt.Fprintf(out, "Rama eliminada: %s\n", br)
+		_, _ = fmt.Fprintf(out, "Rama eliminada: %s\n", br)
 	}
 
 	for _, st := range targetRuns {
 		if err := store.Delete(st.RunID); err != nil {
 			return fmt.Errorf("clean: eliminando run %s: %w", st.RunID, err)
 		}
-		fmt.Fprintf(out, "Run eliminado: %s\n", st.RunID)
+		_, _ = fmt.Fprintf(out, "Run eliminado: %s\n", st.RunID)
 	}
 
 	if entries, err := os.ReadDir(weaverDir); err == nil && len(entries) == 0 {

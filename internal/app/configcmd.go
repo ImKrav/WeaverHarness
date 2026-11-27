@@ -119,6 +119,6 @@ func ConfigInit(o ConfigInitOptions) error {
 	if err := os.WriteFile(targetPath, []byte(rendered), 0o600); err != nil {
 		return fmt.Errorf("config init: escribiendo %s: %w", targetPath, err)
 	}
-	fmt.Fprintf(out, "Configuración inicializada en %s (preset: %s)\n", targetPath, preset)
+	_, _ = fmt.Fprintf(out, "Configuración inicializada en %s (preset: %s)\n", targetPath, preset)
 	return nil
 }

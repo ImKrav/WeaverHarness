@@ -139,7 +139,7 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 		return fmt.Errorf("app: comprobando estado git: %w", err)
 	}
 	if dirty {
-		fmt.Fprint(out, "Hay cambios sin commit; no entrarán en la ejecución. ¿Continuar? [s/N] ")
+		_, _ = fmt.Fprint(out, "Hay cambios sin commit; no entrarán en la ejecución. ¿Continuar? [s/N] ")
 		line, _ := bufio.NewReader(in).ReadString('\n')
 		ans := strings.ToLower(strings.TrimSpace(line))
 		if ans != "s" && ans != "si" && ans != "sí" && ans != "y" && ans != "yes" {
@@ -409,7 +409,7 @@ func appendChatEntry(path string, e chatEntry) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, _ = f.Write(append(data, '\n'))
 }
 
@@ -507,7 +507,7 @@ func buildApprovalPreview(repoDir string, st *run.State, req engine.ApprovalRequ
 				if len(t.Checks) > 0 {
 					checks = strings.Join(t.Checks, "; ")
 				}
-				b.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\n", t.ID, t.Role, deps, checks))
+				fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", t.ID, t.Role, deps, checks)
 			}
 			if len(req.Plan.GlobalChecks) > 0 {
 				b.WriteString("\nGlobal checks:\n")

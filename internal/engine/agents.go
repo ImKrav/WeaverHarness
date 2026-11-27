@@ -33,7 +33,7 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 	if e.state == nil {
 		e.mu.Unlock()
 		e.guardMu.Unlock()
-		return "", errors.New("engine: no hay ejecuciÃ³n activa")
+		return "", errors.New("engine: no hay ejecución activa")
 	}
 
 	mergedFn := func(agentID string) bool {
@@ -85,7 +85,7 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 	if err != nil {
 		e.mu.Unlock()
 		e.guardMu.Unlock()
-		return "", fmt.Errorf("engine: leyendo rama de integraciÃ³n %s: %w", e.state.IntegrationBranch, err)
+		return "", fmt.Errorf("engine: leyendo rama de integración %s: %w", e.state.IntegrationBranch, err)
 	}
 
 	if err := e.repo.AddWorktree(ctx, worktree, branch, baseSHA); err != nil {
@@ -112,7 +112,7 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 		wData.SpecRefs = task.SpecRefs
 		wData.Checks = task.Checks
 	} else {
-		wData.Title = "Resolver conflictos de integraciÃ³n"
+		wData.Title = "Resolver conflictos de integración"
 		if e.state.Plan != nil {
 			wData.Checks = e.state.Plan.GlobalChecks
 		}
@@ -195,7 +195,7 @@ func (e *Engine) FollowUp(ctx context.Context, agentID, msg string) error {
 	e.mu.Lock()
 	if e.state == nil {
 		e.mu.Unlock()
-		return errors.New("engine: no hay ejecuciÃ³n activa")
+		return errors.New("engine: no hay ejecución activa")
 	}
 	ag := e.state.Agent(agentID)
 	if ag == nil {
@@ -771,7 +771,7 @@ func (e *Engine) AgentDiff(ctx context.Context, agentID, path string, maxBytes i
 	e.mu.Lock()
 	if e.state == nil {
 		e.mu.Unlock()
-		return "", false, errors.New("engine: no hay ejecuciÃ³n activa")
+		return "", false, errors.New("engine: no hay ejecución activa")
 	}
 	ag := e.state.Agent(agentID)
 	if ag == nil {
@@ -832,7 +832,7 @@ func (e *Engine) AcceptTask(ctx context.Context, taskID, agentID string) error {
 	e.mu.Lock()
 	if e.state == nil {
 		e.mu.Unlock()
-		return errors.New("engine: no hay ejecuciÃ³n activa")
+		return errors.New("engine: no hay ejecución activa")
 	}
 	task := e.state.Task(taskID)
 	if task == nil {
@@ -846,7 +846,7 @@ func (e *Engine) AcceptTask(ctx context.Context, taskID, agentID string) error {
 	}
 	if ag.Status != run.AgentFinished {
 		e.mu.Unlock()
-		return fmt.Errorf("engine: el agente %s no finalizÃ³ correctamente (%s)", agentID, ag.Status)
+		return fmt.Errorf("engine: el agente %s no finalizó correctamente (%s)", agentID, ag.Status)
 	}
 
 	dir := e.store.AgentDir(e.state.RunID, agentID)
@@ -858,7 +858,7 @@ func (e *Engine) AcceptTask(ctx context.Context, taskID, agentID string) error {
 	var rec receipt.Receipt
 	if err := json.Unmarshal(recBytes, &rec); err != nil {
 		e.mu.Unlock()
-		return fmt.Errorf("engine: recibo invÃ¡lido de %s: %w", agentID, err)
+		return fmt.Errorf("engine: recibo inválido de %s: %w", agentID, err)
 	}
 	if rec.Status != "done" {
 		e.mu.Unlock()
@@ -868,16 +868,16 @@ func (e *Engine) AcceptTask(ctx context.Context, taskID, agentID string) error {
 	verBytes, err := os.ReadFile(filepath.Join(dir, "verification.json"))
 	if err != nil {
 		e.mu.Unlock()
-		return fmt.Errorf("engine: falta verificaciÃ³n de %s: %w", agentID, err)
+		return fmt.Errorf("engine: falta verificación de %s: %w", agentID, err)
 	}
 	var ver verify.Verification
 	if err := json.Unmarshal(verBytes, &ver); err != nil {
 		e.mu.Unlock()
-		return fmt.Errorf("engine: verificaciÃ³n invÃ¡lida de %s: %w", agentID, err)
+		return fmt.Errorf("engine: verificación inválida de %s: %w", agentID, err)
 	}
 	if !ver.Passed {
 		e.mu.Unlock()
-		return fmt.Errorf("engine: la verificaciÃ³n RDD de %s no pasÃ³", agentID)
+		return fmt.Errorf("engine: la verificación RDD de %s no pasó", agentID)
 	}
 
 	task.Status = run.TaskAccepted
@@ -943,7 +943,7 @@ func (e *Engine) Cancel(agentID string) error {
 	e.mu.Lock()
 	if e.state == nil {
 		e.mu.Unlock()
-		return errors.New("engine: no hay ejecuciÃ³n activa")
+		return errors.New("engine: no hay ejecución activa")
 	}
 	ag := e.state.Agent(agentID)
 	if ag == nil {
@@ -981,7 +981,7 @@ func (e *Engine) Cleanup(ctx context.Context, agentID string) error {
 	e.mu.Lock()
 	if e.state == nil {
 		e.mu.Unlock()
-		return errors.New("engine: no hay ejecuciÃ³n activa")
+		return errors.New("engine: no hay ejecución activa")
 	}
 	ag := e.state.Agent(agentID)
 	if ag == nil {
@@ -998,7 +998,7 @@ func (e *Engine) Cleanup(ctx context.Context, agentID string) error {
 		return fmt.Errorf("engine: verificando merge de %s: %w", branch, err)
 	}
 	if !merged {
-		return fmt.Errorf("engine: la rama %s aÃºn no estÃ¡ mergeada en %s", branch, integBranch)
+		return fmt.Errorf("engine: la rama %s aún no está mergeada en %s", branch, integBranch)
 	}
 	headSHA, err := e.repo.RevParse(ctx, branch)
 	if err != nil {

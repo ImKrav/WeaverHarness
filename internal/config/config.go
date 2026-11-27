@@ -39,7 +39,7 @@ func (d *Duration) UnmarshalText(text []byte) error {
 
 // MarshalText formats the duration as a Go duration string.
 func (d Duration) MarshalText() ([]byte, error) {
-	return []byte(d.Duration.String()), nil
+	return []byte(d.String()), nil
 }
 
 // Role maps a logical role name to a provider and model.

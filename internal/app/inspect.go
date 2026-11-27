@@ -104,15 +104,15 @@ func Inspect(o InspectOptions) error {
 		})
 	}
 
-	fmt.Fprintf(out, "Run ID:            %s\n", st.RunID)
-	fmt.Fprintf(out, "Fase:              %s\n", st.Phase)
-	fmt.Fprintf(out, "Rama base:         %s\n", st.BaseBranch)
-	fmt.Fprintf(out, "Rama integración:  %s\n", st.IntegrationBranch)
-	fmt.Fprintf(out, "Directorio sesión: %s\n", st.SessionDir)
+	_, _ = fmt.Fprintf(out, "Run ID:            %s\n", st.RunID)
+	_, _ = fmt.Fprintf(out, "Fase:              %s\n", st.Phase)
+	_, _ = fmt.Fprintf(out, "Rama base:         %s\n", st.BaseBranch)
+	_, _ = fmt.Fprintf(out, "Rama integración:  %s\n", st.IntegrationBranch)
+	_, _ = fmt.Fprintf(out, "Directorio sesión: %s\n", st.SessionDir)
 
-	fmt.Fprintln(out, "\nAprobaciones:")
+	_, _ = fmt.Fprintln(out, "\nAprobaciones:")
 	if len(st.Approvals) == 0 {
-		fmt.Fprintln(out, "  (ninguna)")
+		_, _ = fmt.Fprintln(out, "  (ninguna)")
 	} else {
 		for _, a := range st.Approvals {
 			estado := "rechazada"
@@ -126,34 +126,34 @@ func Inspect(o InspectOptions) error {
 			if a.Comment != "" {
 				line += " [comentario: " + a.Comment + "]"
 			}
-			fmt.Fprintln(out, line)
+			_, _ = fmt.Fprintln(out, line)
 		}
 	}
 
-	fmt.Fprintln(out, "\nTareas:")
+	_, _ = fmt.Fprintln(out, "\nTareas:")
 	if st.Plan == nil || len(st.Plan.Tasks) == 0 {
-		fmt.Fprintln(out, "  (ninguna)")
+		_, _ = fmt.Fprintln(out, "  (ninguna)")
 	} else {
 		tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tROL\tESTADO\tRONDAS\tAGENTE")
+		_, _ = fmt.Fprintln(tw, "ID\tROL\tESTADO\tRONDAS\tAGENTE")
 		for _, t := range st.Plan.Tasks {
 			agentCol := t.AcceptedAgent
 			if agentCol == "" {
 				agentCol = "-"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", t.ID, t.Role, t.Status, t.Rounds, agentCol)
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", t.ID, t.Role, t.Status, t.Rounds, agentCol)
 		}
 		if err := tw.Flush(); err != nil {
 			return err
 		}
 	}
 
-	fmt.Fprintln(out, "\nAgentes:")
+	_, _ = fmt.Fprintln(out, "\nAgentes:")
 	if len(st.Agents) == 0 {
-		fmt.Fprintln(out, "  (ninguno)")
+		_, _ = fmt.Fprintln(out, "  (ninguno)")
 	} else {
 		tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tTAREA\tPROVEEDOR/MODELO\tESTADO\tDURACIÓN\tRECIBO\tVERIF\tERROR")
+		_, _ = fmt.Fprintln(tw, "ID\tTAREA\tPROVEEDOR/MODELO\tESTADO\tDURACIÓN\tRECIBO\tVERIF\tERROR")
 		for _, ag := range st.Agents {
 			rcCol := "-"
 			if rc, ok := receipts[ag.ID]; ok {
@@ -175,7 +175,7 @@ func Inspect(o InspectOptions) error {
 			if errCol == "" {
 				errCol = "-"
 			}
-			fmt.Fprintf(
+			_, _ = fmt.Fprintf(
 				tw,
 				"%s\t%s\t%s/%s\t%s\t%s\t%s\t%s\t%s\n",
 				ag.ID,
@@ -229,21 +229,21 @@ func Logs(o LogsOptions) error {
 	}
 
 	agDir := store.AgentDir(st.RunID, ag.ID)
-	fmt.Fprintf(out, "Run %s · Agente %s · tarea %s · %s/%s · estado %s\n",
+	_, _ = fmt.Fprintf(out, "Run %s · Agente %s · tarea %s · %s/%s · estado %s\n",
 		st.RunID, ag.ID, ag.TaskID, ag.Provider, ag.Model, ag.Status)
 
-	fmt.Fprintln(out, "\n--- Recibo (receipt.json) ---")
+	_, _ = fmt.Fprintln(out, "\n--- Recibo (receipt.json) ---")
 	if rc := readTextFile(filepath.Join(agDir, "receipt.json")); rc != "" {
-		fmt.Fprintln(out, rc)
+		_, _ = fmt.Fprintln(out, rc)
 	} else {
-		fmt.Fprintln(out, "(no disponible)")
+		_, _ = fmt.Fprintln(out, "(no disponible)")
 	}
 
-	fmt.Fprintln(out, "\n--- Verificación (verification.json) ---")
+	_, _ = fmt.Fprintln(out, "\n--- Verificación (verification.json) ---")
 	if vr := readTextFile(filepath.Join(agDir, "verification.json")); vr != "" {
-		fmt.Fprintln(out, vr)
+		_, _ = fmt.Fprintln(out, vr)
 	} else {
-		fmt.Fprintln(out, "(no disponible)")
+		_, _ = fmt.Fprintln(out, "(no disponible)")
 	}
 
 	if !o.OnlyReceipt {
@@ -251,11 +251,11 @@ func Logs(o LogsOptions) error {
 		if tail <= 0 {
 			tail = 100
 		}
-		fmt.Fprintf(out, "\n--- Transcript (últimas %d líneas de transcript.jsonl) ---\n", tail)
+		_, _ = fmt.Fprintf(out, "\n--- Transcript (últimas %d líneas de transcript.jsonl) ---\n", tail)
 		if tr := readTailLines(filepath.Join(agDir, "transcript.jsonl"), tail); tr != "" {
-			fmt.Fprintln(out, tr)
+			_, _ = fmt.Fprintln(out, tr)
 		} else {
-			fmt.Fprintln(out, "(no disponible)")
+			_, _ = fmt.Fprintln(out, "(no disponible)")
 		}
 	}
 	return nil

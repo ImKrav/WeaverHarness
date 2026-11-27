@@ -25,7 +25,7 @@ type cliDeps struct {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, `Uso: weaver [opciones] [comando]
+	_, _ = fmt.Fprintln(w, `Uso: weaver [opciones] [comando]
 
 Comandos:
   (sin argumentos)                    Inicia una sesión interactiva (TUI) en el repositorio actual
@@ -96,25 +96,25 @@ func runMainWith(args []string, deps cliDeps) int {
 	rest := fs.Args()
 	if showVersion {
 		if len(rest) > 0 {
-			fmt.Fprintf(deps.stderr, "Argumentos inesperados con --version: %v\n", rest)
+			_, _ = fmt.Fprintf(deps.stderr, "Argumentos inesperados con --version: %v\n", rest)
 			return 2
 		}
-		fmt.Fprintf(deps.stdout, "weaver %s (%s, %s)\n", version, commit, date)
+		_, _ = fmt.Fprintf(deps.stdout, "weaver %s (%s, %s)\n", version, commit, date)
 		return 0
 	}
 
 	if len(rest) > 0 && rest[0] == "version" {
 		if len(rest) > 1 {
-			fmt.Fprintf(deps.stderr, "Argumentos inesperados para 'version': %v\n", rest[1:])
+			_, _ = fmt.Fprintf(deps.stderr, "Argumentos inesperados para 'version': %v\n", rest[1:])
 			return 2
 		}
-		fmt.Fprintf(deps.stdout, "weaver %s (%s, %s)\n", version, commit, date)
+		_, _ = fmt.Fprintf(deps.stdout, "weaver %s (%s, %s)\n", version, commit, date)
 		return 0
 	}
 
 	cwd, err := deps.getwd()
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "Error obteniendo directorio actual: %v\n", err)
+		_, _ = fmt.Fprintf(deps.stderr, "Error obteniendo directorio actual: %v\n", err)
 		return 1
 	}
 
@@ -127,7 +127,7 @@ func runMainWith(args []string, deps cliDeps) int {
 			In:            deps.stdin,
 			Out:           deps.stdout,
 		}); err != nil {
-			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+			_, _ = fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 			return 1
 		}
 		return 0
@@ -144,7 +144,7 @@ func runMainWith(args []string, deps cliDeps) int {
 		sub.BoolVar(&subSkipCheck, "skip-check", subSkipCheck, "Omite el pre-check de arranque")
 		sub.BoolVar(&subNoMouse, "no-mouse", subNoMouse, "Desactiva captura de ratón en la TUI")
 		sub.Usage = func() {
-			fmt.Fprintln(deps.stderr, "Uso: weaver resume [--preset <nombre>] [--skip-check] [--no-mouse] [run-id]")
+			_, _ = fmt.Fprintln(deps.stderr, "Uso: weaver resume [--preset <nombre>] [--skip-check] [--no-mouse] [run-id]")
 		}
 		if err := sub.Parse(rest[1:]); err != nil {
 			if err == flag.ErrHelp {
@@ -170,18 +170,18 @@ func runMainWith(args []string, deps cliDeps) int {
 			In:            deps.stdin,
 			Out:           deps.stdout,
 		}); err != nil {
-			fmt.Fprintf(deps.stderr, "Error al reanudar: %v\n", err)
+			_, _ = fmt.Fprintf(deps.stderr, "Error al reanudar: %v\n", err)
 			return 1
 		}
 		return 0
 
 	case "runs":
 		if len(rest) > 1 {
-			fmt.Fprintf(deps.stderr, "Uso: weaver runs\n")
+			_, _ = fmt.Fprintf(deps.stderr, "Uso: weaver runs\n")
 			return 2
 		}
 		if err := app.Runs(cwd, deps.stdout); err != nil {
-			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+			_, _ = fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 			return 1
 		}
 		return 0
@@ -192,7 +192,7 @@ func runMainWith(args []string, deps cliDeps) int {
 		var asJSON bool
 		sub.BoolVar(&asJSON, "json", false, "Imprime la inspección en formato JSON")
 		sub.Usage = func() {
-			fmt.Fprintln(deps.stderr, "Uso: weaver inspect [--json] [run-id]")
+			_, _ = fmt.Fprintln(deps.stderr, "Uso: weaver inspect [--json] [run-id]")
 		}
 		if err := sub.Parse(rest[1:]); err != nil {
 			if err == flag.ErrHelp {
@@ -214,7 +214,7 @@ func runMainWith(args []string, deps cliDeps) int {
 			JSON:  asJSON,
 			Out:   deps.stdout,
 		}); err != nil {
-			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+			_, _ = fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 			return 1
 		}
 		return 0
@@ -227,7 +227,7 @@ func runMainWith(args []string, deps cliDeps) int {
 		sub.IntVar(&tail, "tail", 100, "Número de líneas finales del transcript")
 		sub.BoolVar(&onlyReceipt, "only-receipt", false, "Omite transcript.jsonl y muestra solo recibo y verificación")
 		sub.Usage = func() {
-			fmt.Fprintln(deps.stderr, "Uso: weaver logs [--tail N] [--only-receipt] [run-id] <agent-id>")
+			_, _ = fmt.Fprintln(deps.stderr, "Uso: weaver logs [--tail N] [--only-receipt] [run-id] <agent-id>")
 		}
 		if err := sub.Parse(rest[1:]); err != nil {
 			if err == flag.ErrHelp {
@@ -254,7 +254,7 @@ func runMainWith(args []string, deps cliDeps) int {
 			OnlyReceipt: onlyReceipt,
 			Out:         deps.stdout,
 		}); err != nil {
-			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+			_, _ = fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 			return 1
 		}
 		return 0
@@ -267,7 +267,7 @@ func runMainWith(args []string, deps cliDeps) int {
 		sub.BoolVar(&all, "all", false, "Incluye ejecuciones abiertas y todos los worktrees de weaver")
 		sub.BoolVar(&force, "force", false, "Omite la confirmación interactiva al usar --all")
 		sub.Usage = func() {
-			fmt.Fprintln(deps.stderr, "Uso: weaver clean [--dry-run] [--all] [--force]")
+			_, _ = fmt.Fprintln(deps.stderr, "Uso: weaver clean [--dry-run] [--all] [--force]")
 		}
 		if err := sub.Parse(rest[1:]); err != nil {
 			if err == flag.ErrHelp {
@@ -289,19 +289,19 @@ func runMainWith(args []string, deps cliDeps) int {
 			In:     deps.stdin,
 			Out:    deps.stdout,
 		}); err != nil {
-			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+			_, _ = fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 			return 1
 		}
 		return 0
 
 	case "config":
 		if len(rest) < 2 {
-			fmt.Fprintln(deps.stderr, "Uso: weaver config <show|init> [opciones]")
+			_, _ = fmt.Fprintln(deps.stderr, "Uso: weaver config <show|init> [opciones]")
 			return 2
 		}
 		switch rest[1] {
 		case "-h", "--help", "help":
-			fmt.Fprintln(deps.stderr, `Uso:
+			_, _ = fmt.Fprintln(deps.stderr, `Uso:
   weaver config show [--preset <nombre>]
   weaver config init [--preset <nombre>] [--global] [--force]`)
 			return 0
@@ -311,7 +311,7 @@ func runMainWith(args []string, deps cliDeps) int {
 			subPreset := preset
 			sub.StringVar(&subPreset, "preset", subPreset, "Muestra la configuración aplicando un preset")
 			sub.Usage = func() {
-				fmt.Fprintln(deps.stderr, "Uso: weaver config show [--preset <nombre>]")
+				_, _ = fmt.Fprintln(deps.stderr, "Uso: weaver config show [--preset <nombre>]")
 			}
 			if err := sub.Parse(rest[2:]); err != nil {
 				if err == flag.ErrHelp {
@@ -328,7 +328,7 @@ func runMainWith(args []string, deps cliDeps) int {
 				Preset: subPreset,
 				Out:    deps.stdout,
 			}); err != nil {
-				fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+				_, _ = fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 				return 1
 			}
 			return 0
@@ -342,7 +342,7 @@ func runMainWith(args []string, deps cliDeps) int {
 			sub.BoolVar(&globalFlag, "global", false, "Escribe en la configuración global de usuario")
 			sub.BoolVar(&forceFlag, "force", false, "Sobrescribe si el archivo ya existe")
 			sub.Usage = func() {
-				fmt.Fprintln(deps.stderr, "Uso: weaver config init [--preset <nombre>] [--global] [--force]")
+				_, _ = fmt.Fprintln(deps.stderr, "Uso: weaver config init [--preset <nombre>] [--global] [--force]")
 			}
 			if err := sub.Parse(rest[2:]); err != nil {
 				if err == flag.ErrHelp {
@@ -361,19 +361,19 @@ func runMainWith(args []string, deps cliDeps) int {
 				Force:  forceFlag,
 				Out:    deps.stdout,
 			}); err != nil {
-				fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+				_, _ = fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 				return 1
 			}
 			return 0
 
 		default:
-			fmt.Fprintf(deps.stderr, "Subcomando desconocido de config: %q\nUso: weaver config <show|init> [opciones]\n", rest[1])
+			_, _ = fmt.Fprintf(deps.stderr, "Subcomando desconocido de config: %q\nUso: weaver config <show|init> [opciones]\n", rest[1])
 			return 2
 		}
 
 	case "doctor":
 		if len(rest) > 1 {
-			fmt.Fprintf(deps.stderr, "Uso: weaver doctor\n")
+			_, _ = fmt.Fprintf(deps.stderr, "Uso: weaver doctor\n")
 			return 2
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -381,7 +381,7 @@ func runMainWith(args []string, deps cliDeps) int {
 		return app.Doctor(ctx, cwd, deps.stdout)
 
 	default:
-		fmt.Fprintf(deps.stderr, "Subcomando desconocido: %q\n\n", rest[0])
+		_, _ = fmt.Fprintf(deps.stderr, "Subcomando desconocido: %q\n\n", rest[0])
 		usage(deps.stderr)
 		return 2
 	}

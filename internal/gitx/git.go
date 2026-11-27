@@ -25,7 +25,7 @@ type Repo struct {
 // WorktreeInfo describes one git worktree entry reported by git worktree list.
 type WorktreeInfo struct {
 	Path   string
-	Branch string // nombre corto sin "refs/heads/", vacÃ­o si detached
+	Branch string // nombre corto sin "refs/heads/", vacío si detached
 	Head   string
 }
 

@@ -261,7 +261,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OrchestratorEvent:
 		m.handleOrchestratorEvent(msg.Event)
-		if msg.Event.Kind == provider.EventTurnEnd {
+		if msg.Kind == provider.EventTurnEnd {
 			m.thinking = false
 		}
 		return m, nil

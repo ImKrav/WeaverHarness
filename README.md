@@ -34,18 +34,30 @@ go build ./cmd/weaver
 - `weaver`: abre la TUI de chat en el repositorio git actual. Conversas con el orquestador; cuando apruebas spec, plan e integración (`[a]probar` / `[r]echazar`), el orquestador delega tareas en subagentes dentro de worktrees aislados y `weaver` verifica sus recibos antes de integrar.
 - `weaver doctor`: comprueba qué CLIs están instalados, su versión, estado de sesión y si los modelos configurados aparecen en el CLI. Devuelve código de salida `1` si al proveedor del rol orquestador le falta algo.
 - `weaver resume [run-id]`: reanuda la última ejecución guardada en `.weaver/runs/` (o la indicada por `run-id`), marcando como `interrupted` los agentes que seguían en curso y reabriendo la sesión del orquestador.
-- `weaver runs`: lista las ejecuciones guardadas con su fase, rama de integración, tareas y agentes.
+- `weaver runs`: lista las ejecuciones guardadas con su fase, rama de integración, tareas, agentes y duración activa.
 
 ### Configuración opcional
 
 Por defecto usa Claude (`opus`) como `architect`, Antigravity (`gemini-4-hydrogen`) como `implementer` y Codex (`gpt-5.6-sol`) como `reviewer`. Puedes sobrescribir roles o binarios en la configuración global (`<UserConfigDir>/weaver/config.toml`) o por proyecto (`.weaver/config.toml`).
 
-### Pruebas
+### Pruebas, calidad y seguridad
 
-Tests unitarios:
+Tests unitarios (con detector de condiciones de carrera cuando CGO/`gcc` esté disponible):
 
 ```bash
-go test ./...
+go test -race ./...
+```
+
+> En Windows sin `gcc` / `CGO_ENABLED=1`, ejecuta `go test -count=1 ./...`.
+
+Verificación estática, formato, linter y vulnerabilidades:
+
+```bash
+go vet ./...
+gofmt -l ./cmd ./internal
+golangci-lint run
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go mod tidy && git diff --exit-code go.mod go.sum
 ```
 
 Pruebas de humo con CLIs reales instalados y con sesión iniciada:

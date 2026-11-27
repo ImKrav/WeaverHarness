@@ -48,7 +48,7 @@ func (p *Proc) startOS() error {
 		_ = windows.CloseHandle(job)
 		return nil
 	}
-	defer windows.CloseHandle(procHandle)
+	defer func() { _ = windows.CloseHandle(procHandle) }()
 
 	if err := windows.AssignProcessToJobObject(job, procHandle); err != nil {
 		// If assignment failed (e.g. process already exited), check whether it is still running.
@@ -70,7 +70,7 @@ func isProcessAlive(pid uint32) bool {
 	if err != nil {
 		return false
 	}
-	defer windows.CloseHandle(h)
+	defer func() { _ = windows.CloseHandle(h) }()
 
 	res, err := windows.WaitForSingleObject(h, 0)
 	if err != nil {

@@ -34,7 +34,7 @@ func Doctor(ctx context.Context, dir string, out io.Writer) int {
 
 	cfg, err := config.Load(globalPath, projectPath)
 	if err != nil {
-		fmt.Fprintf(out, "Error cargando configuración: %v\n", err)
+		_, _ = fmt.Fprintf(out, "Error cargando configuración: %v\n", err)
 		return 1
 	}
 
@@ -62,7 +62,7 @@ func Doctor(ctx context.Context, dir string, out io.Writer) int {
 	wg.Wait()
 
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "PROVEEDOR\tINSTALADO\tVERSIÓN\tSESIÓN\tNOTAS")
+	_, _ = fmt.Fprintln(tw, "PROVEEDOR\tINSTALADO\tVERSIÓN\tSESIÓN\tNOTAS")
 
 	for _, name := range config.ProviderNames {
 		h := healths[name]
@@ -98,7 +98,7 @@ func Doctor(ctx context.Context, dir string, out io.Writer) int {
 			notes = append(notes, singleLine)
 		}
 
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, installed, version, logged, strings.Join(notes, "; "))
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, installed, version, logged, strings.Join(notes, "; "))
 	}
 	_ = tw.Flush()
 
