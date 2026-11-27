@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -304,5 +305,26 @@ func TestCompareChangesNormalizesBackslashesAndDotPrefix(t *testing.T) {
 
 	if len(v.OnlyInReceipt) != 0 || len(v.OnlyInDiff) != 0 {
 		t.Fatalf("OnlyInReceipt=%v OnlyInDiff=%v, want both empty", v.OnlyInReceipt, v.OnlyInDiff)
+	}
+}
+
+func TestRunCheckHandlesQuotedArgsOnCurrentOS(t *testing.T) {
+	_, wt, _ := newWorktreeRepo(t)
+	ctx := context.Background()
+
+	exit, tail, timedOut := RunCheck(ctx, wt.Dir, `echo "hola mundo"`, 5*time.Second)
+	if timedOut || exit != 0 {
+		t.Fatalf("echo quoted failed: exit=%d timedOut=%v tail=%q", exit, timedOut, tail)
+	}
+	if !strings.Contains(tail, "hola mundo") {
+		t.Fatalf("echo quoted tail = %q, want substring %q", tail, "hola mundo")
+	}
+
+	exit, tail, timedOut = RunCheck(ctx, wt.Dir, `go env "GOOS"`, 5*time.Second)
+	if timedOut || exit != 0 {
+		t.Fatalf("go env quoted failed: exit=%d timedOut=%v tail=%q", exit, timedOut, tail)
+	}
+	if strings.TrimSpace(tail) != runtime.GOOS {
+		t.Fatalf("go env \"GOOS\" = %q, want %q", strings.TrimSpace(tail), runtime.GOOS)
 	}
 }

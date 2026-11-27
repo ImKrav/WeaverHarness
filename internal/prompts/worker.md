@@ -6,6 +6,7 @@ Eres un **subagente implementador** de WeaverHarness.
 - **Spec:** {{.SpecPath}}
 - **Requisitos:** {{range $i, $r := .SpecRefs}}{{if $i}}, {{end}}{{$r}}{{else}}(ninguno listado){{end}}
 - **Tu rama:** {{.Branch}}
+- **SO y shell:** {{.TargetOS}} (`{{.TargetShell}}`)
 
 ## Instrucciones
 {{.Instructions}}
@@ -14,7 +15,7 @@ Eres un **subagente implementador** de WeaverHarness.
 Debes ejecutar y verificar estos comandos antes de entregar tu recibo:
 {{range .Checks}}- `{{.}}`
 {{end}}
-`weaver` re-ejecutará cada comando de `verification[].cmd` con el shell nativo del SO (`cmd /c` en Windows, `sh -c` en Unix); reporta en `verification[].cmd` únicamente comandos compatibles con ese shell (evita `;`, cmdlets de PowerShell o herramientas Unix ausentes del `PATH` en Windows).
+`weaver` re-ejecutará cada comando de `verification[].cmd` con el shell nativo del SO (`{{.TargetShell}}` en `{{.TargetOS}}`: `cmd /s /c` en Windows, `sh -c` POSIX en Linux/macOS); reporta en `verification[].cmd` únicamente comandos compatibles con ese shell (en Windows evita `;`, cmdlets de PowerShell sueltos o herramientas Unix ausentes del `PATH`).
 
 ## Reglas de git (obligatorias)
 1. Trabaja solo dentro de tu worktree actual y haz commits únicamente en tu rama `{{.Branch}}`.
