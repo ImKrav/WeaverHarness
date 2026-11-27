@@ -14,8 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ImKrav/weaverharness/internal/engine"
 	"github.com/ImKrav/weaverharness/internal/gitx"
 	"github.com/ImKrav/weaverharness/internal/provider"
+	"github.com/ImKrav/weaverharness/internal/run"
 )
 
 func newAppTestRepo(t *testing.T) gitx.Repo {
@@ -242,5 +244,52 @@ func TestDoctorMissingOrchestrator(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "soporte de términos no confirmado") {
 		t.Fatalf("Doctor() missing antigravity terms note:\n%s", out.String())
+	}
+}
+
+func TestPreviewRejectsPathTraversal(t *testing.T) {
+	r := newAppTestRepo(t)
+	outside := filepath.Join(filepath.Dir(r.Dir), "secret.txt")
+	if err := os.WriteFile(outside, []byte("TOP-SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(r.Dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.Dir, "docs", "spec.md"), []byte("# Mi Spec\nREQ-1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := buildApprovalPreview(r.Dir, &run.State{BaseBranch: "main", IntegrationBranch: "weaver/r1", SessionDir: r.Dir}, engine.ApprovalRequest{
+		Kind: "spec",
+		Path: "../secret.txt",
+	})
+	if err == nil {
+		t.Fatal("buildApprovalPreview(../secret.txt) succeeded, want error")
+	}
+
+	_, err = buildApprovalPreview(r.Dir, &run.State{BaseBranch: "main", IntegrationBranch: "weaver/r1", SessionDir: r.Dir}, engine.ApprovalRequest{
+		Kind: "spec",
+		Path: "../../secret.txt",
+	})
+	if err == nil {
+		t.Fatal("buildApprovalPreview(../../secret.txt) succeeded, want error")
+	}
+
+	absOut, err := buildApprovalPreview(r.Dir, &run.State{BaseBranch: "main", IntegrationBranch: "weaver/r1", SessionDir: r.Dir}, engine.ApprovalRequest{
+		Kind: "spec",
+		Path: outside,
+	})
+	if err == nil {
+		t.Fatalf("buildApprovalPreview(absolute outside) succeeded: %q", absOut)
+	}
+
+	okOut, err := buildApprovalPreview(r.Dir, &run.State{BaseBranch: "main", IntegrationBranch: "weaver/r1", SessionDir: r.Dir}, engine.ApprovalRequest{
+		Kind: "spec",
+		Path: "docs/spec.md",
+	})
+	if err != nil || !strings.Contains(okOut, "REQ-1") {
+		t.Fatalf("valid spec preview = (%q, %v), want REQ-1", okOut, err)
 	}
 }

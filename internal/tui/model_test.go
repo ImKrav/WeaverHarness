@@ -152,8 +152,13 @@ func TestAgentsPanel(t *testing.T) {
 	// Navigate down and open detail modal with Enter, close with Esc.
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	var cmd tea.Cmd
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
+	if cmd != nil {
+		next, _ = m.Update(cmd())
+		m = next.(Model)
+	}
 
 	if detailCalled != "a2" {
 		t.Fatalf("detail called with %q, want a2", detailCalled)
@@ -386,8 +391,12 @@ func TestSidebarShowsPlanTasks(t *testing.T) {
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	_ = next.(Model)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil {
+		next, _ = m.Update(cmd())
+		_ = next.(Model)
+	}
 	if detailCalled != "a2" {
 		t.Fatalf("detailCalled = %q, want a2", detailCalled)
 	}
@@ -576,5 +585,212 @@ func TestHelpFooterContextual(t *testing.T) {
 	wantApproval := "[a] aprobar  [r] rechazar  [v] ver detalle"
 	if !strings.Contains(approvalView, wantApproval) {
 		t.Fatalf("View() missing approval help footer %q:\n%s", wantApproval, approvalView)
+	}
+}
+
+func TestModalScrollAndClose(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 150; i++ {
+		lines = append(lines, fmt.Sprintf("linea-%03d", i))
+	}
+	content := strings.Join(lines, "\n")
+
+	m := New("WeaverHarness", nil, nil)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 24})
+	m = next.(Model)
+
+	next, _ = m.Update(modalLoadedMsg{title: "Vista previa", content: content})
+	m = next.(Model)
+	if m.modal == nil {
+		t.Fatal("expected modal open after modalLoadedMsg")
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	if m.modal.vp.YOffset == 0 {
+		t.Fatalf("expected YOffset > 0 after KeyDown")
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = next.(Model)
+	afterPgDown := m.modal.vp.YOffset
+	if afterPgDown <= 1 {
+		t.Fatalf("expected YOffset > 1 after KeyPgDown, got %d", afterPgDown)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = next.(Model)
+	if m.modal.vp.YOffset >= afterPgDown {
+		t.Fatalf("expected YOffset to decrease after KeyUp (before=%d after=%d)", afterPgDown, m.modal.vp.YOffset)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(Model)
+
+	// WindowSizeMsg resizes modal viewport.
+	next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(Model)
+	if m.modal.vp.Width < 100 || m.modal.vp.Height < 18 {
+		t.Fatalf("modal viewport did not resize: %dx%d", m.modal.vp.Width, m.modal.vp.Height)
+	}
+
+	// 'q' closes modal.
+	next, _ = m.Update(keyRunes("q"))
+	m = next.(Model)
+	if m.modal != nil {
+		t.Fatal("modal remained open after pressing q")
+	}
+}
+
+func TestApprovalPlanSummaryRendered(t *testing.T) {
+	m := New("WeaverHarness", nil, nil)
+	reply := make(chan ApprovalAnswer, 1)
+
+	plan := &run.Plan{
+		Tasks: []*run.Task{
+			{ID: "T1", Title: "Base", Role: "implementer", Checks: []string{"go test ./..."}},
+			{ID: "T2", Title: "UI", Role: "reviewer", DependsOn: []string{"T1"}, Checks: []string{"go vet ./..."}},
+		},
+		GlobalChecks: []string{"go test ./...", "go vet ./..."},
+	}
+	next, _ := m.Update(ApprovalAsked{
+		Req:   engine.ApprovalRequest{Kind: "plan", Path: "docs/plan.md", Summary: "plan", Plan: plan},
+		Reply: reply,
+	})
+	m = next.(Model)
+
+	view := m.View()
+	for _, want := range []string{"T1", "T2", "global_checks"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("plan approval chat missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestApprovalPreviewKeyVAsync(t *testing.T) {
+	var previewReq *engine.ApprovalRequest
+	m := NewWithOptions(Options{
+		Title: "WeaverHarness",
+		Preview: func(req engine.ApprovalRequest) (string, error) {
+			cp := req
+			previewReq = &cp
+			return "# Spec preview\ncontenido largo", nil
+		},
+	})
+	reply := make(chan ApprovalAnswer, 1)
+
+	next, _ := m.Update(ApprovalAsked{
+		Req:   engine.ApprovalRequest{Kind: "spec", Path: "docs/spec.md", Summary: "spec"},
+		Reply: reply,
+	})
+	m = next.(Model)
+
+	next, cmd := m.Update(keyRunes("v"))
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("pressing v with empty input returned nil cmd, want async preview cmd")
+	}
+	if m.modal != nil {
+		t.Fatal("modal should not open synchronously before cmd executes")
+	}
+
+	loaded := cmd()
+	if previewReq == nil || previewReq.Path != "docs/spec.md" {
+		t.Fatalf("Preview callback got %+v", previewReq)
+	}
+	next, _ = m.Update(loaded)
+	m = next.(Model)
+	if m.modal == nil || !strings.Contains(m.View(), "contenido largo") {
+		t.Fatalf("modal did not open with preview content:\n%s", m.View())
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.modal != nil {
+		t.Fatal("modal remained open after Esc")
+	}
+	if m.pendingApproval == nil {
+		t.Fatal("pendingApproval was cleared after closing preview modal")
+	}
+}
+
+func TestModalLiveRefreshWhileRunning(t *testing.T) {
+	logText := "primera linea\nsegunda linea\ntercera linea"
+	m := NewWithOptions(Options{
+		Title: "WeaverHarness",
+		Detail: func(agentID string) AgentDetail {
+			return AgentDetail{ID: agentID, LogTail: logText}
+		},
+		InitialAgents: []engine.AgentInfo{
+			{ID: "a1", TaskID: "T1", Provider: "codex", Model: "m", Status: "running"},
+		},
+	})
+
+	// Resize small so log wraps/scrolls cleanly, open modal for a1.
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 70, Height: 14})
+	m = next.(Model)
+
+	// Open modal with 30 lines and scroll to offset 2 (not at bottom).
+	var initLines []string
+	for i := 1; i <= 30; i++ {
+		initLines = append(initLines, fmt.Sprintf("init-%02d", i))
+	}
+	logText = strings.Join(initLines, "\n")
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("expected async detail cmd on Enter")
+	}
+	next, tickScheduleCmd := m.Update(cmd())
+	m = next.(Model)
+	if m.modal == nil || m.modal.agentID != "a1" {
+		t.Fatalf("expected agent modal for a1, got %+v", m.modal)
+	}
+	if tickScheduleCmd == nil {
+		t.Fatal("expected modal tick schedule while a1 is running")
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	savedOffset := m.modal.vp.YOffset
+	if savedOffset == 0 {
+		t.Fatal("expected YOffset > 0 after scrolling down")
+	}
+
+	// Simulate new log appended while running; modalTickMsg reloads and preserves YOffset.
+	logText += "\ninit-31\ninit-32"
+	next, reloadCmd := m.Update(modalTickMsg{agentID: "a1"})
+	m = next.(Model)
+	if reloadCmd == nil {
+		t.Fatal("modalTickMsg while running returned nil cmd")
+	}
+	next, nextTickCmd := m.Update(reloadCmd())
+	m = next.(Model)
+	if nextTickCmd == nil {
+		t.Fatal("expected continued tick scheduling while running")
+	}
+	if m.modal.vp.YOffset != savedOffset {
+		t.Fatalf("YOffset changed from %d to %d after live refresh", savedOffset, m.modal.vp.YOffset)
+	}
+	if !strings.Contains(m.modal.raw, "init-32") {
+		t.Fatalf("modal content did not refresh with init-32")
+	}
+
+	// Now agent finishes -> modalTickMsg must stop scheduling ticks.
+	next, _ = m.Update(AgentsChanged{
+		Agents: []engine.AgentInfo{
+			{ID: "a1", TaskID: "T1", Provider: "codex", Model: "m", Status: "finished"},
+		},
+	})
+	m = next.(Model)
+	next, stopCmd := m.Update(modalTickMsg{agentID: "a1"})
+	m = next.(Model)
+	if stopCmd != nil {
+		t.Fatal("modalTickMsg continued scheduling after agent finished")
 	}
 }

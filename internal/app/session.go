@@ -261,12 +261,16 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 			LogTail:      readTailLines(filepath.Join(agDir, "transcript.jsonl"), 80),
 		}
 	}
+	previewFn := func(r engine.ApprovalRequest) (string, error) {
+		return buildApprovalPreview(repo.Dir, eng.State(), r)
+	}
 
 	model := tui.NewWithOptions(tui.Options{
 		Title:            title,
 		OrchestratorName: orchRole.Model,
 		Send:             orchRun.Send,
 		Detail:           detailFn,
+		Preview:          previewFn,
 		InitialAgents:    eng.Status(""),
 		InitialProgress:  eng.Progress(),
 	})
@@ -294,6 +298,146 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 	_ = orchRun.Kill()
 	<-fwdDone
 	return runErr
+}
+
+func buildApprovalPreview(repoDir string, st *run.State, req engine.ApprovalRequest) (string, error) {
+	var roots []string
+	if st != nil && st.SessionDir != "" {
+		roots = append(roots, st.SessionDir)
+	}
+	if repoDir != "" {
+		roots = append(roots, repoDir)
+	}
+
+	switch req.Kind {
+	case "spec":
+		if strings.TrimSpace(req.Path) == "" {
+			if req.Summary != "" {
+				return req.Summary, nil
+			}
+			return "(sin ruta de spec)", nil
+		}
+		full, err := resolveSafePreviewPath(roots, req.Path)
+		if err != nil {
+			return "", err
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return "", fmt.Errorf("preview: leyendo spec %s: %w", req.Path, err)
+		}
+		return string(data), nil
+
+	case "plan":
+		var b strings.Builder
+		if req.Summary != "" {
+			b.WriteString("Resumen: " + req.Summary + "\n\n")
+		}
+		if req.Plan != nil {
+			b.WriteString("Tareas del plan:\n")
+			b.WriteString("ID\tROL\tDEPS\tCHECKS\n")
+			for _, t := range req.Plan.Tasks {
+				deps := "-"
+				if len(t.DependsOn) > 0 {
+					deps = strings.Join(t.DependsOn, ",")
+				}
+				checks := "-"
+				if len(t.Checks) > 0 {
+					checks = strings.Join(t.Checks, "; ")
+				}
+				b.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\n", t.ID, t.Role, deps, checks))
+			}
+			if len(req.Plan.GlobalChecks) > 0 {
+				b.WriteString("\nGlobal checks:\n")
+				for _, c := range req.Plan.GlobalChecks {
+					b.WriteString("  - " + c + "\n")
+				}
+			}
+		}
+		if strings.TrimSpace(req.Path) != "" {
+			full, err := resolveSafePreviewPath(roots, req.Path)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return "", err
+			}
+			if err == nil {
+				if data, readErr := os.ReadFile(full); readErr == nil && len(data) > 0 {
+					if b.Len() > 0 {
+						b.WriteString("\n")
+					}
+					b.WriteString("--- " + req.Path + " ---\n")
+					b.Write(data)
+				}
+			}
+		}
+		if b.Len() == 0 {
+			return "(plan vacío)", nil
+		}
+		return b.String(), nil
+
+	case "integration":
+		if st == nil || st.BaseBranch == "" || st.IntegrationBranch == "" {
+			return "", errors.New("preview: sin ramas activas para previsualizar integración")
+		}
+		gitDir := repoDir
+		if st.SessionDir != "" {
+			gitDir = st.SessionDir
+		}
+		r, err := gitx.Open(gitDir)
+		if err != nil {
+			return "", fmt.Errorf("preview: abriendo repo: %w", err)
+		}
+		revRange := st.BaseBranch + ".." + st.IntegrationBranch
+		logOut, err := r.Run(context.Background(), "log", "--oneline", revRange)
+		if err != nil {
+			return "", fmt.Errorf("preview: leyendo commits (%s): %w", revRange, err)
+		}
+		statOut, err := r.Run(context.Background(), "diff", "--stat", revRange)
+		if err != nil {
+			return "", fmt.Errorf("preview: leyendo diff --stat (%s): %w", revRange, err)
+		}
+		return fmt.Sprintf("Commits (%s):\n%s\n\nDiff stat (%s):\n%s", revRange, logOut, revRange, statOut), nil
+
+	default:
+		if req.Summary != "" {
+			return req.Summary, nil
+		}
+		return fmt.Sprintf("Aprobación %s (%s)", req.Kind, req.Path), nil
+	}
+}
+
+func resolveSafePreviewPath(roots []string, rel string) (string, error) {
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("preview: se requiere ruta relativa dentro del repositorio: %q", rel)
+	}
+	cleaned := filepath.Clean(rel)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("preview: ruta fuera del repositorio: %q", rel)
+	}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		cand := filepath.Join(absRoot, cleaned)
+		relBack, err := filepath.Rel(absRoot, cand)
+		if err != nil || relBack == ".." || strings.HasPrefix(relBack, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("preview: ruta fuera del repositorio: %q", rel)
+		}
+		if _, err := os.Stat(cand); err == nil {
+			realRoot, errR := filepath.EvalSymlinks(absRoot)
+			realCand, errC := filepath.EvalSymlinks(cand)
+			if errR == nil && errC == nil {
+				realRel, errRel := filepath.Rel(realRoot, realCand)
+				if errRel != nil || realRel == ".." || strings.HasPrefix(realRel, ".."+string(filepath.Separator)) {
+					return "", fmt.Errorf("preview: enlace simbólico fuera del repositorio: %q", rel)
+				}
+			}
+			return cand, nil
+		}
+	}
+	return "", fmt.Errorf("%w: %s", os.ErrNotExist, rel)
 }
 
 func runHeadless(

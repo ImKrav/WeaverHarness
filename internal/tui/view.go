@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 // View implements tea.Model.
 func (m Model) View() string {
 	if m.modal != nil {
-		return m.renderModal(*m.modal)
+		return m.renderModal(m.modal)
 	}
 
 	totalW, panelW, chatW, bodyH := m.layout()
@@ -163,29 +164,19 @@ func (m Model) renderSidePanel(width int) string {
 	return b.String()
 }
 
-func (m Model) renderModal(d AgentDetail) string {
+func (m Model) renderModal(modal *modalState) string {
+	boxW, innerW, _ := m.modalDims()
+	pct := int(math.Round(modal.vp.ScrollPercent() * 100))
+	title := fmt.Sprintf("%s · %d%% (↑/↓ PgUp/PgDn · Esc/q cerrar)", modal.title, pct)
+	if innerW > 4 && ansi.StringWidth(title) > innerW {
+		title = ansi.Truncate(title, innerW, "…")
+	}
+
 	var b strings.Builder
-	b.WriteString(styleHeader.Render(fmt.Sprintf("Detalle del agente %s (Esc para cerrar)", d.ID)))
+	b.WriteString(styleHeader.Render(title))
 	b.WriteString("\n\n")
-	if d.Receipt != "" {
-		b.WriteString(styleHeader.Render("Recibo:"))
-		b.WriteByte('\n')
-		b.WriteString(d.Receipt)
-		b.WriteString("\n\n")
-	}
-	if d.Verification != "" {
-		b.WriteString(styleHeader.Render("Verificación:"))
-		b.WriteByte('\n')
-		b.WriteString(d.Verification)
-		b.WriteString("\n\n")
-	}
-	if d.LogTail != "" {
-		b.WriteString(styleHeader.Render("Log:"))
-		b.WriteByte('\n')
-		b.WriteString(d.LogTail)
-		b.WriteByte('\n')
-	}
-	return styleBorder.Width(max(40, m.width-4)).Render(b.String())
+	b.WriteString(modal.vp.View())
+	return styleBorder.Width(boxW).Padding(0, 1).Render(b.String())
 }
 
 func taskIcon(status run.TaskStatus) string {
