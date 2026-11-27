@@ -154,6 +154,7 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 	e.cancelled[agentID] = false
 
 	infos := e.snapshotInfosLocked()
+	prog := e.progressLocked()
 	e.mu.Unlock()
 	if err := e.guard.Rebase(ctx); err != nil {
 		e.guardMu.Unlock()
@@ -164,6 +165,7 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 	e.guardMu.Unlock()
 
 	e.notify(infos)
+	e.notify(prog)
 
 	req := provider.RunRequest{
 		Mode:  provider.Worker,
@@ -243,9 +245,11 @@ func (e *Engine) FollowUp(ctx context.Context, agentID, msg string) error {
 		ResumeID: ag.SessionID,
 	}
 	infos := e.snapshotInfosLocked()
+	prog := e.progressLocked()
 	e.mu.Unlock()
 
 	e.notify(infos)
+	e.notify(prog)
 	go e.runAgent(runCtx, cancel, doneCh, agentID, p, req)
 	return nil
 }
@@ -303,9 +307,11 @@ func (e *Engine) runAgent(
 	}
 	_ = e.store.Save(e.state)
 	infos := e.snapshotInfosLocked()
+	prog := e.progressLocked()
 	e.mu.Unlock()
 
 	e.notify(infos)
+	e.notify(prog)
 
 	agentDir := e.store.AgentDir(runID, agentID)
 	final, cancelled, err := e.executeProvider(runCtx, agentID, p, req, agentDir)
@@ -423,6 +429,7 @@ func (e *Engine) runAgent(
 	_ = writeJSONFile(filepath.Join(agentDir, "receipt.json"), rec)
 	_ = writeJSONFile(filepath.Join(agentDir, "verification.json"), ver)
 
+	updated := false
 	e.mu.Lock()
 	if e.state != nil {
 		if a := e.state.Agent(agentID); a != nil {
@@ -441,10 +448,15 @@ func (e *Engine) runAgent(
 		}
 		_ = e.store.Save(e.state)
 		infos = e.snapshotInfosLocked()
+		prog = e.progressLocked()
+		updated = true
 	}
 	e.mu.Unlock()
 
-	e.notify(infos)
+	if updated {
+		e.notify(infos)
+		e.notify(prog)
+	}
 }
 
 func (e *Engine) cleanupCancelledQueued(agentID string) {
@@ -585,9 +597,11 @@ func (e *Engine) setTerminalStatus(agentID string, status run.AgentStatus, errMs
 	}
 	_ = e.store.Save(e.state)
 	infos := e.snapshotInfosLocked()
+	prog := e.progressLocked()
 	e.mu.Unlock()
 
 	e.notify(infos)
+	e.notify(prog)
 }
 
 func (e *Engine) isCancelled(agentID string) bool {
@@ -824,9 +838,11 @@ func (e *Engine) AcceptTask(ctx context.Context, taskID, agentID string) error {
 	}
 
 	infos := e.snapshotInfosLocked()
+	prog := e.progressLocked()
 	e.mu.Unlock()
 
 	e.notify(infos)
+	e.notify(prog)
 	return nil
 }
 
@@ -896,6 +912,7 @@ func (e *Engine) Cancel(agentID string) error {
 		_ = e.store.Save(e.state)
 	}
 	infos := e.snapshotInfosLocked()
+	prog := e.progressLocked()
 	e.mu.Unlock()
 
 	if pr != nil {
@@ -905,6 +922,7 @@ func (e *Engine) Cancel(agentID string) error {
 		cancel()
 	}
 	e.notify(infos)
+	e.notify(prog)
 	return nil
 }
 

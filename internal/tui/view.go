@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/ImKrav/weaverharness/internal/engine"
+	"github.com/ImKrav/weaverharness/internal/run"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // View implements tea.Model.
@@ -15,12 +17,9 @@ func (m Model) View() string {
 		return m.renderModal(*m.modal)
 	}
 
-	totalW := max(40, m.width)
-	panelW := min(34, max(24, totalW/3))
-	chatW := max(20, totalW-panelW-3)
-	bodyH := max(6, m.height-7)
+	totalW, panelW, chatW, bodyH := m.layout()
 
-	header := styleHeader.Render(m.title)
+	header := m.renderHeader(totalW)
 
 	chatPane := lipgloss.NewStyle().
 		Width(chatW).
@@ -33,7 +32,7 @@ func (m Model) View() string {
 		PaddingLeft(1).
 		BorderLeft(true).
 		BorderStyle(lipgloss.NormalBorder()).
-		Render(m.renderAgentsPanel(panelW - 2))
+		Render(m.renderSidePanel(panelW - 2))
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, chatPane, panelPane)
 
@@ -56,8 +55,53 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-func (m Model) renderAgentsPanel(width int) string {
+func (m Model) renderHeader(totalW int) string {
+	title := strings.TrimSpace(m.title)
+	if title == "" {
+		title = "WeaverHarness"
+	}
+
+	parts := []string{title}
+	if m.progress.RunID != "" {
+		parts = append(parts, "run "+m.progress.RunID)
+	}
+	if m.progress.Phase != "" {
+		if m.progress.TasksTotal > 0 {
+			parts = append(parts, fmt.Sprintf("%s · %d/%d tareas", m.progress.Phase, m.progress.TasksAccepted, m.progress.TasksTotal))
+		} else {
+			parts = append(parts, string(m.progress.Phase))
+		}
+	}
+	text := strings.Join(parts, " · ")
+	if m.thinking {
+		text += " · " + m.spinner.View() + " pensando…"
+	}
+	if totalW > 4 && ansi.StringWidth(text) > totalW {
+		text = ansi.Truncate(text, totalW, "…")
+	}
+	return styleHeader.Render(text)
+}
+
+func (m Model) renderSidePanel(width int) string {
 	var b strings.Builder
+
+	if len(m.progress.Tasks) > 0 {
+		b.WriteString(styleHeader.Render("Tareas"))
+		b.WriteByte('\n')
+		for _, t := range m.progress.Tasks {
+			line := fmt.Sprintf("%s %s", taskIcon(t.Status), t.ID)
+			if t.Title != "" {
+				line += " " + t.Title
+			}
+			if width > 4 && ansi.StringWidth(line) > width {
+				line = ansi.Truncate(line, width, "…")
+			}
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		b.WriteByte('\n')
+	}
+
 	b.WriteString(styleHeader.Render("Agentes"))
 	b.WriteByte('\n')
 
@@ -73,16 +117,16 @@ func (m Model) renderAgentsPanel(width int) string {
 		}
 		icon := agentIcon(ag)
 		line1 := fmt.Sprintf("%s%s %s %s %s/%s", prefix, icon, ag.ID, ag.TaskID, ag.Provider, ag.Model)
-		if len([]rune(line1)) > width && width > 4 {
-			line1 = string([]rune(line1)[:width-1]) + "…"
+		if width > 4 && ansi.StringWidth(line1) > width {
+			line1 = ansi.Truncate(line1, width, "…")
 		}
 		b.WriteString(line1)
 		b.WriteByte('\n')
 
 		sub := agentSubtitle(ag)
 		line2 := "    " + sub
-		if len([]rune(line2)) > width && width > 4 {
-			line2 = string([]rune(line2)[:width-1]) + "…"
+		if width > 4 && ansi.StringWidth(line2) > width {
+			line2 = ansi.Truncate(line2, width, "…")
 		}
 		b.WriteString(styleDim.Render(line2))
 		b.WriteByte('\n')
@@ -113,6 +157,21 @@ func (m Model) renderModal(d AgentDetail) string {
 		b.WriteByte('\n')
 	}
 	return styleBorder.Width(max(40, m.width-4)).Render(b.String())
+}
+
+func taskIcon(status run.TaskStatus) string {
+	switch status {
+	case run.TaskAccepted:
+		return "✓"
+	case run.TaskRunning:
+		return "●"
+	case run.TaskReceiptOK:
+		return "◐"
+	case run.TaskReceiptFailed:
+		return "✗"
+	default:
+		return "○"
+	}
 }
 
 func agentIcon(ag engine.AgentInfo) string {

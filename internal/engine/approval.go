@@ -87,7 +87,10 @@ func (e *Engine) RequestApproval(ctx context.Context, r ApprovalRequest) (bool, 
 		e.mu.Unlock()
 		return false, "", err
 	}
+	prog := e.progressLocked()
 	e.mu.Unlock()
+
+	e.notify(prog)
 
 	if r.Kind == "integration" && approved && afterHook != nil {
 		msg, hookErr := afterHook(ctx)
@@ -111,15 +114,15 @@ func clonePlan(p *run.Plan) *run.Plan {
 		return nil
 	}
 	cp := &run.Plan{
-		Tasks:        make([]*run.Task, 0, len(p.Tasks)),
 		GlobalChecks: append([]string(nil), p.GlobalChecks...),
+		Tasks:        make([]*run.Task, 0, len(p.Tasks)),
 	}
 	for _, t := range p.Tasks {
-		nt := *t
-		nt.SpecRefs = append([]string(nil), t.SpecRefs...)
-		nt.DependsOn = append([]string(nil), t.DependsOn...)
-		nt.Checks = append([]string(nil), t.Checks...)
-		cp.Tasks = append(cp.Tasks, &nt)
+		tCopy := *t
+		tCopy.SpecRefs = append([]string(nil), t.SpecRefs...)
+		tCopy.DependsOn = append([]string(nil), t.DependsOn...)
+		tCopy.Checks = append([]string(nil), t.Checks...)
+		cp.Tasks = append(cp.Tasks, &tCopy)
 	}
 	return cp
 }

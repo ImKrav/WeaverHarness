@@ -76,6 +76,8 @@ func (b *tuiBridge) Notify(v any) {
 	switch msg := v.(type) {
 	case []engine.AgentInfo:
 		p.Send(tui.AgentsChanged{Agents: msg})
+	case engine.RunProgress:
+		p.Send(tui.ProgressChanged{Progress: msg})
 	case []gitx.Violation:
 		p.Send(tui.RefViolations{Items: msg})
 	}
@@ -244,7 +246,7 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 		return runHeadless(ctx, eng, orchRun, o.Headless)
 	}
 
-	title := fmt.Sprintf("WeaverHarness · run %s · orquestador %s/%s", st.RunID, orchRole.Provider, orchRole.Model)
+	title := fmt.Sprintf("WeaverHarness · orquestador %s/%s", orchRole.Provider, orchRole.Model)
 	detailFn := func(agentID string) tui.AgentDetail {
 		cur := eng.State()
 		if cur == nil {
@@ -259,13 +261,16 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 		}
 	}
 
-	model := tui.New(title, orchRun.Send, detailFn)
+	model := tui.NewWithOptions(tui.Options{
+		Title:            title,
+		OrchestratorName: orchRole.Model,
+		Send:             orchRun.Send,
+		Detail:           detailFn,
+		InitialAgents:    eng.Status(""),
+		InitialProgress:  eng.Progress(),
+	})
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	bridge.setProgram(p)
-
-	if existing := eng.Status(""); len(existing) > 0 {
-		p.Send(tui.AgentsChanged{Agents: existing})
-	}
 
 	fwdDone := make(chan struct{})
 	go func() {

@@ -10,6 +10,8 @@ import (
 
 	"github.com/ImKrav/weaverharness/internal/engine"
 	"github.com/ImKrav/weaverharness/internal/provider"
+	"github.com/ImKrav/weaverharness/internal/run"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -54,7 +56,7 @@ func TestOrchestratorTextRendered(t *testing.T) {
 	m = next.(Model)
 
 	view := m.View()
-	if !strings.Contains(view, "opus › Spec lista") {
+	if !strings.Contains(view, "orquestador › Spec lista") {
 		t.Fatalf("View() missing orchestrator text:\n%s", view)
 	}
 	if !strings.Contains(view, "· Read") {
@@ -247,5 +249,168 @@ func TestRefViolationsAndOrchestratorExited(t *testing.T) {
 	m = next.(Model)
 	if !strings.Contains(m.View(), "weaver resume") {
 		t.Fatalf("View() missing weaver resume hint on exit:\n%s", m.View())
+	}
+}
+
+func TestDynamicOrchestratorPrefix(t *testing.T) {
+	m := NewWithOptions(Options{
+		Title:            "WeaverHarness",
+		OrchestratorName: "sonnet",
+	})
+	next, _ := m.Update(OrchestratorEvent{Event: provider.Event{Kind: provider.EventText, Text: "hola"}})
+	m = next.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "sonnet › hola") {
+		t.Fatalf("View() missing dynamic prefix sonnet › hola:\n%s", view)
+	}
+	if strings.Contains(view, "opus › ") {
+		t.Fatalf("View() contains hardcoded opus prefix:\n%s", view)
+	}
+}
+
+func TestThinkingSpinnerAndStatusBar(t *testing.T) {
+	m := NewWithOptions(Options{
+		Title: "WeaverHarness",
+		Send:  func(string) error { return nil },
+		InitialProgress: engine.RunProgress{
+			RunID:         "20261127-100000",
+			Phase:         run.PhasePlanApproved,
+			TasksTotal:    3,
+			TasksAccepted: 1,
+		},
+	})
+
+	m = typeText(m, "arranca")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.thinking {
+		t.Fatal("m.thinking = false after Enter, want true")
+	}
+	if cmd == nil {
+		t.Fatal("expected spinner tick cmd after Enter when thinking starts")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "plan_approved · 1/3 tareas") {
+		t.Fatalf("View() missing status bar progress:\n%s", view)
+	}
+	if sp := m.spinner.View(); sp == "" || !strings.Contains(view, sp) {
+		t.Fatalf("View() missing spinner %q:\n%s", sp, view)
+	}
+
+	tickMsg := m.spinner.Tick()
+	next, tickCmd := m.Update(tickMsg)
+	m = next.(Model)
+	if tickCmd == nil {
+		t.Fatal("expected next tick cmd while m.thinking == true")
+	}
+
+	next, _ = m.Update(OrchestratorEvent{Event: provider.Event{Kind: provider.EventTurnEnd}})
+	m = next.(Model)
+	if m.thinking {
+		t.Fatal("m.thinking remained true after EventTurnEnd")
+	}
+	next, stopCmd := m.Update(spinner.TickMsg{})
+	m = next.(Model)
+	if stopCmd != nil {
+		t.Fatal("spinner tick should not reschedule after EventTurnEnd")
+	}
+
+	// Verify OrchestratorExited also stops thinking.
+	m = typeText(m, "otra")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.thinking {
+		t.Fatal("m.thinking = false after second Enter")
+	}
+	next, _ = m.Update(OrchestratorExited{})
+	m = next.(Model)
+	if m.thinking {
+		t.Fatal("m.thinking remained true after OrchestratorExited")
+	}
+	_, exitStopCmd := m.Update(spinner.TickMsg{})
+	if exitStopCmd != nil {
+		t.Fatal("spinner tick should not reschedule after OrchestratorExited")
+	}
+}
+
+func TestSidebarShowsPlanTasks(t *testing.T) {
+	var detailCalled string
+	m := NewWithOptions(Options{
+		Title: "WeaverHarness",
+		Detail: func(agentID string) AgentDetail {
+			detailCalled = agentID
+			return AgentDetail{ID: agentID, LogTail: "detalle"}
+		},
+	})
+
+	next, _ := m.Update(ProgressChanged{
+		Progress: engine.RunProgress{
+			RunID:         "20261127-100000",
+			Phase:         run.PhasePlanApproved,
+			TasksTotal:    3,
+			TasksAccepted: 1,
+			TasksRunning:  1,
+			Tasks: []engine.TaskProgress{
+				{ID: "T1", Title: "Primera", Role: "implementer", Status: run.TaskAccepted},
+				{ID: "T2", Title: "Segunda", Role: "implementer", Status: run.TaskRunning},
+				{ID: "T3", Title: "Tercera", Role: "implementer", Status: run.TaskPending},
+			},
+		},
+	})
+	m = next.(Model)
+
+	next, _ = m.Update(AgentsChanged{
+		Agents: []engine.AgentInfo{
+			{ID: "a1", TaskID: "T1", Provider: "codex", Model: "m", Status: "finished"},
+			{ID: "a2", TaskID: "T2", Provider: "codex", Model: "m", Status: "running"},
+		},
+	})
+	m = next.(Model)
+
+	view := m.View()
+	idxTareas := strings.Index(view, "Tareas")
+	idxAgentes := strings.Index(view, "Agentes")
+	if idxTareas < 0 || idxAgentes < 0 || idxTareas >= idxAgentes {
+		t.Fatalf("expected Tareas section above Agentes (tareas=%d agentes=%d):\n%s", idxTareas, idxAgentes, view)
+	}
+	for _, want := range []string{"✓ T1", "● T2", "○ T3"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing task status %q:\n%s", want, view)
+		}
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = next.(Model)
+	if detailCalled != "a2" {
+		t.Fatalf("detailCalled = %q, want a2", detailCalled)
+	}
+}
+
+func TestHeaderUpdatesOnNewRunID(t *testing.T) {
+	m := NewWithOptions(Options{
+		Title: "WeaverHarness",
+		InitialProgress: engine.RunProgress{
+			RunID: "run-1",
+			Phase: run.PhaseOpen,
+		},
+	})
+	if v := m.View(); !strings.Contains(v, "run-1") {
+		t.Fatalf("initial View() missing run-1:\n%s", v)
+	}
+
+	next, _ := m.Update(ProgressChanged{
+		Progress: engine.RunProgress{
+			RunID: "run-2",
+			Phase: run.PhaseSpecApproved,
+		},
+	})
+	m = next.(Model)
+	v := m.View()
+	if !strings.Contains(v, "run-2") || strings.Contains(v, "run-1") {
+		t.Fatalf("updated View() did not replace run-1 with run-2:\n%s", v)
 	}
 }

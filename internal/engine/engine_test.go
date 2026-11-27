@@ -541,3 +541,118 @@ func TestRunSnapshotReportsPhaseAndMergedTasks(t *testing.T) {
 		t.Fatalf("unexpected T2 snapshot: %+v", snap.Tasks[1])
 	}
 }
+
+func TestProgressSnapshot(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	st := run.Store{Root: filepath.Join(r.Dir, ".weaver", "runs")}
+
+	var mu sync.Mutex
+	var events []RunProgress
+	t1Started := make(chan struct{})
+	releaseT1 := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseT1) })
+
+	prov := &fakeProvider{
+		name: "codex",
+		handler: func(call int, runCtx context.Context, req provider.RunRequest) (provider.Run, error) {
+			if err := os.WriteFile(filepath.Join(req.Dir, "p1.txt"), []byte("ok\n"), 0o644); err != nil {
+				return nil, err
+			}
+			wt, _ := gitx.Open(req.Dir)
+			_, _ = wt.CommitAll(runCtx, "p1")
+			sha, _ := wt.RevParse(runCtx, "HEAD")
+			close(t1Started)
+			select {
+			case <-releaseT1:
+			case <-runCtx.Done():
+				return nil, runCtx.Err()
+			}
+			return newFakeRun("sid-prog", []string{`{"ok":1}`}, provider.Final{
+				Text:      receiptBlock("T1", "done", "p1.txt", []string{sha}, "echo ok"),
+				SessionID: "sid-prog",
+			}), nil
+		},
+	}
+
+	eng, err := New(ctx, Options{
+		Cfg:       testConfig(),
+		Repo:      r,
+		Store:     st,
+		Providers: map[string]provider.Provider{"codex": prov},
+		Approver:  &fakeApprover{approved: true},
+		Notify: func(v any) {
+			if rp, ok := v.(RunProgress); ok {
+				mu.Lock()
+				events = append(events, rp)
+				mu.Unlock()
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close(ctx)
+
+	s, err := eng.StartRun(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p0 := eng.Progress()
+	if p0.RunID != s.RunID || p0.Phase != run.PhaseOpen || p0.TasksTotal != 0 {
+		t.Fatalf("after StartRun Progress() = %+v", p0)
+	}
+
+	if _, _, err := eng.RequestApproval(ctx, ApprovalRequest{Kind: "spec", Path: "docs/spec.md", Summary: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	p1 := eng.Progress()
+	if p1.Phase != run.PhaseSpecApproved {
+		t.Fatalf("after spec Progress().Phase = %s, want spec_approved", p1.Phase)
+	}
+
+	plan := &run.Plan{
+		Tasks: []*run.Task{
+			{ID: "T1", Title: "Uno", Role: "implementer", Checks: []string{"echo ok"}},
+			{ID: "T2", Title: "Dos", Role: "implementer", DependsOn: []string{"T1"}, Checks: []string{"echo ok"}},
+		},
+		GlobalChecks: []string{"echo ok"},
+	}
+	if _, _, err := eng.RequestApproval(ctx, ApprovalRequest{Kind: "plan", Path: "docs/plan.md", Summary: "p", Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+	p2 := eng.Progress()
+	if p2.Phase != run.PhasePlanApproved || p2.TasksTotal != 2 || p2.TasksAccepted != 0 || p2.TasksRunning != 0 {
+		t.Fatalf("after plan Progress() = %+v", p2)
+	}
+	if len(p2.Tasks) != 2 || p2.Tasks[0].ID != "T1" || p2.Tasks[1].ID != "T2" {
+		t.Fatalf("ordered Tasks = %+v", p2.Tasks)
+	}
+
+	a1, err := eng.Spawn(ctx, "T1", "", "", "", "haz T1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-t1Started
+	pRun := eng.Progress()
+	if pRun.TasksRunning != 1 || pRun.Tasks[0].Status != run.TaskRunning {
+		t.Fatalf("while running Progress() = %+v", pRun)
+	}
+
+	releaseOnce.Do(func() { close(releaseT1) })
+	_ = eng.Wait(ctx, []string{a1}, 10*time.Second)
+	if err := eng.AcceptTask(ctx, "T1", a1); err != nil {
+		t.Fatal(err)
+	}
+	pAcc := eng.Progress()
+	if pAcc.TasksAccepted != 1 || pAcc.TasksRunning != 0 || pAcc.Tasks[0].Status != run.TaskAccepted {
+		t.Fatalf("after AcceptTask Progress() = %+v", pAcc)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) < 4 {
+		t.Fatalf("expected RunProgress notifications, got %d", len(events))
+	}
+}

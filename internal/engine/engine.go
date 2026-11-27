@@ -84,6 +84,24 @@ type RunSnapshot struct {
 	Agents            []AgentInfo    `json:"agents"`
 }
 
+// TaskProgress summarizes one task for the TUI status/sidebar view.
+type TaskProgress struct {
+	ID     string
+	Title  string
+	Role   string
+	Status run.TaskStatus
+}
+
+// RunProgress summarizes run phase and plan progress pushed to the TUI.
+type RunProgress struct {
+	RunID         string
+	Phase         run.Phase
+	TasksTotal    int
+	TasksAccepted int
+	TasksRunning  int
+	Tasks         []TaskProgress
+}
+
 // Options configures an Engine instance.
 type Options struct {
 	Cfg       config.Config
@@ -178,6 +196,13 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 
 // StartRun creates a new run and prepares or reuses the session integration worktree.
 func (e *Engine) StartRun(ctx context.Context) (*run.State, error) {
+	var notifyProg *RunProgress
+	defer func() {
+		if notifyProg != nil {
+			e.notify(*notifyProg)
+		}
+	}()
+
 	e.guardMu.Lock()
 	defer e.guardMu.Unlock()
 	e.mu.Lock()
@@ -237,6 +262,8 @@ func (e *Engine) StartRun(ctx context.Context) (*run.State, error) {
 	if err := e.guard.Rebase(ctx); err != nil {
 		return nil, fmt.Errorf("engine: actualizando guardia de refs: %w", err)
 	}
+	prog := e.progressLocked()
+	notifyProg = &prog
 	return st, nil
 }
 
@@ -257,6 +284,17 @@ func (e *Engine) allocateRunIDLocked(ctx context.Context) string {
 // Resume loads runID (or the latest run when empty), recreates the session worktree if missing,
 // and marks queued/running agents interrupted.
 func (e *Engine) Resume(ctx context.Context, runID string) (*run.State, error) {
+	var (
+		notifyAgents []AgentInfo
+		notifyProg   *RunProgress
+	)
+	defer func() {
+		if notifyProg != nil {
+			e.notify(notifyAgents)
+			e.notify(*notifyProg)
+		}
+	}()
+
 	e.guardMu.Lock()
 	defer e.guardMu.Unlock()
 	e.mu.Lock()
@@ -306,6 +344,9 @@ func (e *Engine) Resume(ctx context.Context, runID string) (*run.State, error) {
 			e.agentChecks[ag.ID] = sum
 		}
 	}
+	notifyAgents = e.snapshotInfosLocked()
+	prog := e.progressLocked()
+	notifyProg = &prog
 	return st, nil
 }
 
@@ -314,6 +355,42 @@ func (e *Engine) State() *run.State {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.state
+}
+
+// Progress returns the current run phase and plan task progress summary.
+func (e *Engine) Progress() RunProgress {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.progressLocked()
+}
+
+func (e *Engine) progressLocked() RunProgress {
+	if e.state == nil {
+		return RunProgress{}
+	}
+	prog := RunProgress{
+		RunID: e.state.RunID,
+		Phase: e.state.Phase,
+	}
+	if e.state.Plan != nil {
+		prog.TasksTotal = len(e.state.Plan.Tasks)
+		prog.Tasks = make([]TaskProgress, 0, len(e.state.Plan.Tasks))
+		for _, t := range e.state.Plan.Tasks {
+			switch t.Status {
+			case run.TaskAccepted:
+				prog.TasksAccepted++
+			case run.TaskRunning:
+				prog.TasksRunning++
+			}
+			prog.Tasks = append(prog.Tasks, TaskProgress{
+				ID:     t.ID,
+				Title:  t.Title,
+				Role:   t.Role,
+				Status: t.Status,
+			})
+		}
+	}
+	return prog
 }
 
 // RunSnapshot returns a consistent view of the active run phase, tasks, merge status, and subagents.

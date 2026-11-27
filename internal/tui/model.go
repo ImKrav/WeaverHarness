@@ -7,6 +7,7 @@ import (
 	"github.com/ImKrav/weaverharness/internal/engine"
 	"github.com/ImKrav/weaverharness/internal/gitx"
 	"github.com/ImKrav/weaverharness/internal/provider"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +22,9 @@ type OrchestratorExited struct{ Err error }
 
 // AgentsChanged updates the read-only subagent panel.
 type AgentsChanged struct{ Agents []engine.AgentInfo }
+
+// ProgressChanged updates the SDD phase and plan tasks summary.
+type ProgressChanged struct{ Progress engine.RunProgress }
 
 // RefViolations notifies the chat that the ref guard detected or restored ref mutations.
 type RefViolations struct{ Items []gitx.Violation }
@@ -45,19 +49,40 @@ type AgentDetail struct {
 	LogTail      string
 }
 
+// Options configures a TUI Model instance.
+type Options struct {
+	Title            string
+	OrchestratorName string
+	Send             func(string) error
+	Detail           func(agentID string) AgentDetail
+	Preview          func(req engine.ApprovalRequest) (string, error)
+	CancelAgent      func(agentID string) error
+	OnChatEntry      func(role, text string)
+	InitialAgents    []engine.AgentInfo
+	InitialProgress  engine.RunProgress
+	InitialChat      []string
+}
+
 // Model is the Bubble Tea root model for WeaverHarness.
 type Model struct {
-	title    string
-	sendFn   func(string) error
-	detailFn func(agentID string) AgentDetail
+	title         string
+	orchLabel     string
+	sendFn        func(string) error
+	detailFn      func(agentID string) AgentDetail
+	previewFn     func(req engine.ApprovalRequest) (string, error)
+	cancelFn      func(agentID string) error
+	onChatEntryFn func(role, text string)
 
 	width  int
 	height int
 
 	viewport  viewport.Model
 	input     textarea.Model
+	spinner   spinner.Model
+	thinking  bool
 	chatLines []string
 
+	progress     engine.RunProgress
 	agents       []engine.AgentInfo
 	selected     int
 	panelFocused bool
@@ -70,6 +95,15 @@ type Model struct {
 
 // New constructs a Model with sensible default dimensions for both live TTY and headless tests.
 func New(title string, send func(string) error, detail func(agentID string) AgentDetail) Model {
+	return NewWithOptions(Options{
+		Title:  title,
+		Send:   send,
+		Detail: detail,
+	})
+}
+
+// NewWithOptions constructs a Model configured with initial state, labels, and callbacks.
+func NewWithOptions(o Options) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Escribe un mensaje al orquestador..."
 	ta.Prompt = "› "
@@ -77,15 +111,31 @@ func New(title string, send func(string) error, detail func(agentID string) Agen
 	ta.SetHeight(2)
 	ta.Focus()
 
+	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
+	sp.Style = stylePrompt
+
+	orchLabel := strings.TrimSpace(o.OrchestratorName)
+	if orchLabel == "" {
+		orchLabel = "orquestador"
+	}
+
 	vp := viewport.New(66, 20)
 	m := Model{
-		title:    title,
-		sendFn:   send,
-		detailFn: detail,
-		width:    100,
-		height:   28,
-		viewport: vp,
-		input:    ta,
+		title:         o.Title,
+		orchLabel:     orchLabel,
+		sendFn:        o.Send,
+		detailFn:      o.Detail,
+		previewFn:     o.Preview,
+		cancelFn:      o.CancelAgent,
+		onChatEntryFn: o.OnChatEntry,
+		width:         100,
+		height:        28,
+		viewport:      vp,
+		input:         ta,
+		spinner:       sp,
+		progress:      o.InitialProgress,
+		agents:        append([]engine.AgentInfo(nil), o.InitialAgents...),
+		chatLines:     append([]string(nil), o.InitialChat...),
 	}
 	m.resize()
 	return m
@@ -105,11 +155,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 
+	case spinner.TickMsg:
+		if !m.thinking {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+
 	case OrchestratorEvent:
 		m.handleOrchestratorEvent(msg.Event)
+		if msg.Event.Kind == provider.EventTurnEnd {
+			m.thinking = false
+		}
 		return m, nil
 
 	case OrchestratorExited:
+		m.thinking = false
 		if msg.Err != nil {
 			m.appendChat(styleError.Render(fmt.Sprintf("✗ Orquestador terminó (%v). Usa 'weaver resume' para retomar.", msg.Err)))
 		} else {
@@ -122,6 +184,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selected >= len(m.agents) {
 			m.selected = max(0, len(m.agents)-1)
 		}
+		return m, nil
+
+	case ProgressChanged:
+		m.progress = msg.Progress
 		return m, nil
 
 	case RefViolations:
@@ -273,9 +339,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.sendFn != nil {
 			if err := m.sendFn(text); err != nil {
 				m.appendChat(styleError.Render("✗ error al enviar: " + err.Error()))
+				return m, nil
 			}
 		}
-		return m, nil
+		m.thinking = true
+		return m, m.spinner.Tick
 	}
 
 	// Typing returns focus to chat textarea.
@@ -289,7 +357,7 @@ func (m *Model) handleOrchestratorEvent(ev provider.Event) {
 	switch ev.Kind {
 	case provider.EventText:
 		if ev.Text != "" {
-			m.appendChat("opus › " + ev.Text)
+			m.appendChat(m.orchLabel + " › " + ev.Text)
 		}
 	case provider.EventTool:
 		if ev.Tool != "" {
@@ -308,13 +376,21 @@ func (m *Model) appendChat(line string) {
 	m.viewport.GotoBottom()
 }
 
-func (m *Model) resize() {
-	totalW := max(40, m.width)
+func (m Model) layout() (totalW, panelW, chatW, bodyH int) {
+	totalW = max(40, m.width)
 	totalH := max(14, m.height)
 
-	panelW := min(34, max(24, totalW/3))
-	chatW := max(20, totalW-panelW-3)
-	bodyH := max(6, totalH-7)
+	panelW = min(44, max(26, totalW/3))
+	if totalW-panelW-3 < 18 {
+		panelW = max(16, totalW-21)
+	}
+	chatW = max(20, totalW-panelW-3)
+	bodyH = max(6, totalH-7)
+	return totalW, panelW, chatW, bodyH
+}
+
+func (m *Model) resize() {
+	totalW, _, chatW, bodyH := m.layout()
 
 	m.viewport.Width = chatW
 	m.viewport.Height = bodyH
