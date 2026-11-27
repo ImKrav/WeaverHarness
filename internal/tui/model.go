@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // OrchestratorEvent wraps a normalized event from the orchestrator stream.
@@ -76,11 +77,12 @@ type Model struct {
 	width  int
 	height int
 
-	viewport  viewport.Model
-	input     textarea.Model
-	spinner   spinner.Model
-	thinking  bool
-	chatLines []string
+	viewport    viewport.Model
+	input       textarea.Model
+	spinner     spinner.Model
+	thinking    bool
+	chatLines   []string
+	unreadBelow int
 
 	progress     engine.RunProgress
 	agents       []engine.AgentInfo
@@ -119,7 +121,8 @@ func NewWithOptions(o Options) Model {
 		orchLabel = "orquestador"
 	}
 
-	vp := viewport.New(66, 20)
+	vp := viewport.New(66, 19)
+	vp.MouseWheelEnabled = true
 	m := Model{
 		title:         o.Title,
 		orchLabel:     orchLabel,
@@ -161,6 +164,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+
+	case tea.MouseMsg:
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		if m.viewport.AtBottom() {
+			m.unreadBelow = 0
+		}
 		return m, cmd
 
 	case OrchestratorEvent:
@@ -252,7 +263,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.pendingApproval != nil && !m.rejecting {
+	if m.pendingApproval != nil && !m.rejecting && strings.TrimSpace(m.input.Value()) == "" {
 		switch strings.ToLower(msg.String()) {
 		case "a":
 			ans := ApprovalAnswer{Approved: true}
@@ -266,6 +277,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Reset()
 			m.input.Placeholder = "Escribe el motivo del rechazo y pulsa Enter..."
 			m.input.Focus()
+			return m, nil
+		case "v":
 			return m, nil
 		}
 	}
@@ -311,6 +324,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPgDown:
 		m.viewport.PageDown()
+		if m.viewport.AtBottom() {
+			m.unreadBelow = 0
+		}
+		return m, nil
+
+	case tea.KeyHome:
+		m.viewport.GotoTop()
+		return m, nil
+
+	case tea.KeyEnd:
+		m.viewport.GotoBottom()
+		m.unreadBelow = 0
 		return m, nil
 
 	case tea.KeyEnter:
@@ -336,6 +361,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.panelFocused = false
 		m.appendChat("tú › " + text)
+		m.viewport.GotoBottom()
+		m.unreadBelow = 0
 		if m.sendFn != nil {
 			if err := m.sendFn(text); err != nil {
 				m.appendChat(styleError.Render("✗ error al enviar: " + err.Error()))
@@ -371,9 +398,32 @@ func (m *Model) handleOrchestratorEvent(ev provider.Event) {
 }
 
 func (m *Model) appendChat(line string) {
+	wasAtBottom := m.viewport.AtBottom()
 	m.chatLines = append(m.chatLines, line)
-	m.viewport.SetContent(strings.Join(m.chatLines, "\n"))
-	m.viewport.GotoBottom()
+	m.viewport.SetContent(wrapChatLines(m.chatLines, m.viewport.Width))
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+		m.unreadBelow = 0
+	} else {
+		m.unreadBelow++
+	}
+}
+
+func wrapChatLines(lines []string, width int) string {
+	if width <= 0 || len(lines) == 0 {
+		return strings.Join(lines, "\n")
+	}
+	wrapped := make([]string, 0, len(lines))
+	for _, l := range lines {
+		w := ansi.Wordwrap(l, width, "")
+		for _, seg := range strings.Split(w, "\n") {
+			if ansi.StringWidth(seg) > width {
+				seg = ansi.Hardwrap(seg, width, true)
+			}
+			wrapped = append(wrapped, seg)
+		}
+	}
+	return strings.Join(wrapped, "\n")
 }
 
 func (m Model) layout() (totalW, panelW, chatW, bodyH int) {
@@ -385,17 +435,22 @@ func (m Model) layout() (totalW, panelW, chatW, bodyH int) {
 		panelW = max(16, totalW-21)
 	}
 	chatW = max(20, totalW-panelW-3)
-	bodyH = max(6, totalH-7)
+	bodyH = max(6, totalH-8)
 	return totalW, panelW, chatW, bodyH
 }
 
 func (m *Model) resize() {
 	totalW, _, chatW, bodyH := m.layout()
 
+	wasAtBottom := m.viewport.AtBottom()
 	m.viewport.Width = chatW
 	m.viewport.Height = bodyH
 	m.input.SetWidth(totalW - 4)
-	m.viewport.SetContent(strings.Join(m.chatLines, "\n"))
+	m.viewport.SetContent(wrapChatLines(m.chatLines, chatW))
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+		m.unreadBelow = 0
+	}
 }
 
 var (

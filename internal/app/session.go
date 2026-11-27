@@ -40,6 +40,7 @@ type SessionOptions struct {
 	Dir      string
 	ResumeID string
 	Resume   bool
+	NoMouse  bool
 	In       io.Reader
 	Out      io.Writer
 	Headless func(send func(string) error, events <-chan provider.Event) error
@@ -269,7 +270,11 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 		InitialAgents:    eng.Status(""),
 		InitialProgress:  eng.Progress(),
 	})
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	progOpts := []tea.ProgramOption{tea.WithAltScreen()}
+	if !o.NoMouse {
+		progOpts = append(progOpts, tea.WithMouseCellMotion())
+	}
+	p := tea.NewProgram(model, progOpts...)
 	bridge.setProgram(p)
 
 	fwdDone := make(chan struct{})

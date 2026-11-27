@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -13,6 +14,8 @@ import (
 	"github.com/ImKrav/weaverharness/internal/run"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func keyRunes(s string) tea.KeyMsg {
@@ -412,5 +415,166 @@ func TestHeaderUpdatesOnNewRunID(t *testing.T) {
 	v := m.View()
 	if !strings.Contains(v, "run-2") || strings.Contains(v, "run-1") {
 		t.Fatalf("updated View() did not replace run-1 with run-2:\n%s", v)
+	}
+}
+
+func TestChatWordWrapPreservesANSIAndWidth(t *testing.T) {
+	m := New("WeaverHarness", nil, nil)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+
+	chatW := m.viewport.Width
+	longWords := strings.Repeat("palabra ", 25) // ~200 chars > chatW
+	styled := lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Render(longWords)
+	wrapped := wrapChatLines([]string{styled}, chatW)
+
+	lines := strings.Split(wrapped, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected styled 200-char line to wrap at width %d, got %d lines", chatW, len(lines))
+	}
+	for i, l := range lines {
+		if w := ansi.StringWidth(l); w > chatW {
+			t.Fatalf("line %d width = %d > chatW %d (%q)", i, w, chatW, l)
+		}
+	}
+
+	// Verify viewport also receives wrapped output without exceeding chatW.
+	next, _ = m.Update(OrchestratorEvent{Event: provider.Event{Kind: provider.EventError, Text: longWords}})
+	m = next.(Model)
+	for i, l := range strings.Split(m.viewport.View(), "\n") {
+		if w := ansi.StringWidth(l); w > chatW {
+			t.Fatalf("viewport line %d width = %d > chatW %d", i, w, chatW)
+		}
+	}
+}
+
+func TestSmartAutoScrollAndUnreadBadge(t *testing.T) {
+	m := New("WeaverHarness", func(string) error { return nil }, nil)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	m = next.(Model)
+
+	for i := 1; i <= 40; i++ {
+		next, _ = m.Update(OrchestratorEvent{Event: provider.Event{
+			Kind: provider.EventText,
+			Text: fmt.Sprintf("mensaje-%02d", i),
+		}})
+		m = next.(Model)
+	}
+	if !m.viewport.AtBottom() {
+		t.Fatalf("expected viewport at bottom initially")
+	}
+
+	// Scroll up; auto-scroll must stop and unreadBelow must increment on new events.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(Model)
+	if m.viewport.AtBottom() {
+		t.Fatalf("expected viewport not at bottom after PgUp")
+	}
+	savedOffset := m.viewport.YOffset
+
+	next, _ = m.Update(OrchestratorEvent{Event: provider.Event{Kind: provider.EventText, Text: "nuevo-1"}})
+	m = next.(Model)
+	if m.viewport.YOffset != savedOffset {
+		t.Fatalf("YOffset moved from %d to %d while scrolled up", savedOffset, m.viewport.YOffset)
+	}
+	if m.unreadBelow != 1 {
+		t.Fatalf("unreadBelow = %d, want 1", m.unreadBelow)
+	}
+	if !strings.Contains(m.View(), "↓ 1 nuevos") {
+		t.Fatalf("View() missing unread badge ↓ 1 nuevos:\n%s", m.View())
+	}
+
+	// Pressing End jumps to bottom and clears unreadBelow.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = next.(Model)
+	if !m.viewport.AtBottom() || m.unreadBelow != 0 {
+		t.Fatalf("after End: atBottom=%v unreadBelow=%d", m.viewport.AtBottom(), m.unreadBelow)
+	}
+	if strings.Contains(m.View(), "nuevos") {
+		t.Fatalf("unread badge remained after End:\n%s", m.View())
+	}
+
+	// Scroll up again, add message, then sending a message resets unreadBelow.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(Model)
+	next, _ = m.Update(OrchestratorEvent{Event: provider.Event{Kind: provider.EventText, Text: "nuevo-2"}})
+	m = next.(Model)
+	if m.unreadBelow != 1 {
+		t.Fatalf("unreadBelow = %d, want 1", m.unreadBelow)
+	}
+	m = typeText(m, "hola")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.unreadBelow != 0 || !m.viewport.AtBottom() {
+		t.Fatalf("after Enter: atBottom=%v unreadBelow=%d", m.viewport.AtBottom(), m.unreadBelow)
+	}
+}
+
+func TestApprovalKeysDoNotFireWhileTyping(t *testing.T) {
+	m := New("WeaverHarness", nil, nil)
+	reply := make(chan ApprovalAnswer, 1)
+
+	m = typeText(m, "antes de aprobar")
+	next, _ := m.Update(ApprovalAsked{
+		Req:   engine.ApprovalRequest{Kind: "spec", Path: "docs/spec.md", Summary: "login"},
+		Reply: reply,
+	})
+	m = next.(Model)
+
+	for _, k := range []string{"a", "r", "v"} {
+		next, _ = m.Update(keyRunes(k))
+		m = next.(Model)
+	}
+
+	if m.pendingApproval == nil {
+		t.Fatal("pendingApproval was unexpectedly resolved while typing in input")
+	}
+	if m.rejecting {
+		t.Fatal("entering 'r' while typing triggered reject mode")
+	}
+	if got := m.input.Value(); got != "antes de aprobararv" {
+		t.Fatalf("input.Value() = %q, want %q", got, "antes de aprobararv")
+	}
+	select {
+	case ans := <-reply:
+		t.Fatalf("unexpected ApprovalAnswer sent while typing: %+v", ans)
+	default:
+	}
+
+	// With empty input, 'a' does approve.
+	m.input.Reset()
+	next, _ = m.Update(keyRunes("a"))
+	m = next.(Model)
+	select {
+	case ans := <-reply:
+		if !ans.Approved {
+			t.Fatalf("expected Approved=true, got %+v", ans)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for approval when input was empty")
+	}
+	if m.pendingApproval != nil {
+		t.Fatal("pendingApproval remained non-nil after approval")
+	}
+}
+
+func TestHelpFooterContextual(t *testing.T) {
+	m := New("WeaverHarness", nil, nil)
+	baseView := m.View()
+	wantGeneral := "Tab panel · Ctrl+J nueva línea · Shift+arrastrar copiar · Ctrl+C salir"
+	if !strings.Contains(baseView, wantGeneral) {
+		t.Fatalf("View() missing general help footer %q:\n%s", wantGeneral, baseView)
+	}
+
+	reply := make(chan ApprovalAnswer, 1)
+	next, _ := m.Update(ApprovalAsked{
+		Req:   engine.ApprovalRequest{Kind: "plan", Path: "docs/plan.md", Summary: "p"},
+		Reply: reply,
+	})
+	m = next.(Model)
+	approvalView := m.View()
+	wantApproval := "[a] aprobar  [r] rechazar  [v] ver detalle"
+	if !strings.Contains(approvalView, wantApproval) {
+		t.Fatalf("View() missing approval help footer %q:\n%s", wantApproval, approvalView)
 	}
 }

@@ -42,17 +42,46 @@ func (m Model) View() string {
 		banner = styleWarn.Render("¿Parar todo? [s/N]")
 	case m.pendingApproval != nil && m.rejecting:
 		banner = stylePrompt.Render(fmt.Sprintf("⚑ Rechazar %s — escribe comentario y pulsa Enter (Esc cancela)", m.pendingApproval.Req.Kind))
+	case m.pendingApproval != nil && strings.TrimSpace(m.input.Value()) != "":
+		banner = stylePrompt.Render(fmt.Sprintf("⚑ Aprobación: %s — vacía el input para usar [a]/[r]/[v]", m.pendingApproval.Req.Kind))
 	case m.pendingApproval != nil:
-		banner = stylePrompt.Render(fmt.Sprintf("⚑ Aprobación: %s — [a]probar [r]echazar", m.pendingApproval.Req.Kind))
+		banner = stylePrompt.Render(fmt.Sprintf("⚑ Aprobación: %s — [a]probar [r]echazar [v]er", m.pendingApproval.Req.Kind))
 	}
 
 	footer := m.input.View()
+	helpFooter := m.renderHelpFooter(totalW)
+
 	parts := []string{header, body}
 	if banner != "" {
 		parts = append(parts, banner)
 	}
-	parts = append(parts, footer)
+	parts = append(parts, footer, helpFooter)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+func (m Model) renderHelpFooter(totalW int) string {
+	var help string
+	switch {
+	case m.pendingApproval != nil && m.rejecting:
+		help = "Enter enviar rechazo · Esc cancelar"
+	case m.pendingApproval != nil:
+		help = "[a] aprobar  [r] rechazar  [v] ver detalle  ·  Ctrl+C salir"
+	default:
+		help = "Tab panel · Ctrl+J nueva línea · Shift+arrastrar copiar · Ctrl+C salir"
+	}
+
+	if m.unreadBelow > 0 {
+		badge := fmt.Sprintf("↓ %d nuevos", m.unreadBelow)
+		line := badge + " · " + help
+		if totalW > 4 && ansi.StringWidth(line) > totalW {
+			return stylePrompt.Render(ansi.Truncate(line, totalW, "…"))
+		}
+		return stylePrompt.Render(badge) + styleDim.Render(" · "+help)
+	}
+	if totalW > 4 && ansi.StringWidth(help) > totalW {
+		help = ansi.Truncate(help, totalW, "…")
+	}
+	return styleDim.Render(help)
 }
 
 func (m Model) renderHeader(totalW int) string {
