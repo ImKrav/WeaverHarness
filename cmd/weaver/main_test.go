@@ -96,3 +96,18 @@ func TestRunsOnNonGitExitOne(t *testing.T) {
 		t.Fatal("expected error message on stderr for non-git dir")
 	}
 }
+
+func TestLogsBadArgCountExitTwo(t *testing.T) {
+	for _, args := range [][]string{{"logs"}, {"logs", "a", "b", "c"}} {
+		var stdout, stderr bytes.Buffer
+		code := runMainWith(args, cliDeps{
+			getwd:  func() (string, error) { return t.TempDir(), nil },
+			stdin:  strings.NewReader(""),
+			stdout: &stdout,
+			stderr: &stderr,
+		})
+		if code != 2 {
+			t.Fatalf("%v exit code = %d, want 2 (stderr=%q)", args, code, stderr.String())
+		}
+	}
+}

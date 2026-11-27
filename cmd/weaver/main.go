@@ -28,15 +28,18 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, `Uso: weaver [opciones] [comando]
 
 Comandos:
-  (sin argumentos)     Inicia una sesión interactiva (TUI) en el repositorio actual
-  resume [run-id]      Reanuda la última ejecución o la indicada por run-id
-  runs                 Lista las ejecuciones guardadas en .weaver/runs
-  doctor               Comprueba instalación, sesión y modelos de los CLIs proveedores
-  version              Muestra la versión compilada de weaver
+  (sin argumentos)                    Inicia una sesión interactiva (TUI) en el repositorio actual
+  resume [run-id]                     Reanuda la última ejecución o la indicada por run-id
+  runs                                Lista las ejecuciones guardadas en .weaver/runs
+  inspect [--json] [run-id]           Muestra estado, tareas, agentes y recibos de una ejecución
+  logs [--tail N] [--only-receipt] [run-id] <agent-id>
+                                      Muestra recibo, verificación y últimas líneas del transcript
+  doctor                              Comprueba instalación, sesión y modelos de los CLIs proveedores
+  version                             Muestra la versión compilada de weaver
 
 Opciones:
-  -v, --version        Muestra la versión compilada de weaver
-  -h, --help           Muestra esta ayuda`)
+  -v, --version                       Muestra la versión compilada de weaver
+  -h, --help                          Muestra esta ayuda`)
 }
 
 func main() {
@@ -145,6 +148,79 @@ func runMainWith(args []string, deps cliDeps) int {
 			return 2
 		}
 		if err := app.Runs(cwd, deps.stdout); err != nil {
+			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+			return 1
+		}
+		return 0
+
+	case "inspect":
+		sub := flag.NewFlagSet("inspect", flag.ContinueOnError)
+		sub.SetOutput(deps.stderr)
+		var asJSON bool
+		sub.BoolVar(&asJSON, "json", false, "Imprime la inspección en formato JSON")
+		sub.Usage = func() {
+			fmt.Fprintln(deps.stderr, "Uso: weaver inspect [--json] [run-id]")
+		}
+		if err := sub.Parse(rest[1:]); err != nil {
+			if err == flag.ErrHelp {
+				return 0
+			}
+			return 2
+		}
+		if sub.NArg() > 1 {
+			sub.Usage()
+			return 2
+		}
+		var runID string
+		if sub.NArg() == 1 {
+			runID = sub.Arg(0)
+		}
+		if err := app.Inspect(app.InspectOptions{
+			Dir:   cwd,
+			RunID: runID,
+			JSON:  asJSON,
+			Out:   deps.stdout,
+		}); err != nil {
+			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+			return 1
+		}
+		return 0
+
+	case "logs":
+		sub := flag.NewFlagSet("logs", flag.ContinueOnError)
+		sub.SetOutput(deps.stderr)
+		var tail int
+		var onlyReceipt bool
+		sub.IntVar(&tail, "tail", 100, "Número de líneas finales del transcript")
+		sub.BoolVar(&onlyReceipt, "only-receipt", false, "Omite transcript.jsonl y muestra solo recibo y verificación")
+		sub.Usage = func() {
+			fmt.Fprintln(deps.stderr, "Uso: weaver logs [--tail N] [--only-receipt] [run-id] <agent-id>")
+		}
+		if err := sub.Parse(rest[1:]); err != nil {
+			if err == flag.ErrHelp {
+				return 0
+			}
+			return 2
+		}
+		var runID, agentID string
+		switch sub.NArg() {
+		case 1:
+			agentID = sub.Arg(0)
+		case 2:
+			runID = sub.Arg(0)
+			agentID = sub.Arg(1)
+		default:
+			sub.Usage()
+			return 2
+		}
+		if err := app.Logs(app.LogsOptions{
+			Dir:         cwd,
+			RunID:       runID,
+			AgentID:     agentID,
+			Tail:        tail,
+			OnlyReceipt: onlyReceipt,
+			Out:         deps.stdout,
+		}); err != nil {
 			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 			return 1
 		}
