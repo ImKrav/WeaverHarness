@@ -34,6 +34,7 @@ Comandos:
   inspect [--json] [run-id]           Muestra estado, tareas, agentes y recibos de una ejecución
   logs [--tail N] [--only-receipt] [run-id] <agent-id>
                                       Muestra recibo, verificación y últimas líneas del transcript
+  clean [--dry-run] [--all] [--force] Limpia worktrees, ramas weaver/* y runs finalizados
   doctor                              Comprueba instalación, sesión y modelos de los CLIs proveedores
   version                             Muestra la versión compilada de weaver
 
@@ -220,6 +221,41 @@ func runMainWith(args []string, deps cliDeps) int {
 			Tail:        tail,
 			OnlyReceipt: onlyReceipt,
 			Out:         deps.stdout,
+		}); err != nil {
+			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+			return 1
+		}
+		return 0
+
+	case "clean":
+		sub := flag.NewFlagSet("clean", flag.ContinueOnError)
+		sub.SetOutput(deps.stderr)
+		var dryRun, all, force bool
+		sub.BoolVar(&dryRun, "dry-run", false, "Muestra lo que se limpiaría sin borrar nada")
+		sub.BoolVar(&all, "all", false, "Incluye ejecuciones abiertas y todos los worktrees de weaver")
+		sub.BoolVar(&force, "force", false, "Omite la confirmación interactiva al usar --all")
+		sub.Usage = func() {
+			fmt.Fprintln(deps.stderr, "Uso: weaver clean [--dry-run] [--all] [--force]")
+		}
+		if err := sub.Parse(rest[1:]); err != nil {
+			if err == flag.ErrHelp {
+				return 0
+			}
+			return 2
+		}
+		if sub.NArg() > 0 {
+			sub.Usage()
+			return 2
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		if err := app.Clean(ctx, app.CleanOptions{
+			Dir:    cwd,
+			DryRun: dryRun,
+			All:    all,
+			Force:  force,
+			In:     deps.stdin,
+			Out:    deps.stdout,
 		}); err != nil {
 			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 			return 1

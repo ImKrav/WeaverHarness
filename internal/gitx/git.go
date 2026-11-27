@@ -22,6 +22,13 @@ type Repo struct {
 	Dir string
 }
 
+// WorktreeInfo describes one git worktree entry reported by git worktree list.
+type WorktreeInfo struct {
+	Path   string
+	Branch string // nombre corto sin "refs/heads/", vacío si detached
+	Head   string
+}
+
 // Open resolves the git repository top-level directory containing dir.
 func Open(dir string) (Repo, error) {
 	probe := Repo{Dir: dir}
@@ -107,6 +114,73 @@ func (r Repo) AttachWorktree(ctx context.Context, path, existingBranch string) e
 func (r Repo) RemoveWorktree(ctx context.Context, path string) error {
 	_, err := r.Run(ctx, "worktree", "remove", "--force", path)
 	return err
+}
+
+// PruneWorktrees removes stale git worktree administrative files.
+func (r Repo) PruneWorktrees(ctx context.Context) error {
+	_, err := r.Run(ctx, "worktree", "prune")
+	return err
+}
+
+// ListWorktrees returns all registered git worktrees for this repository.
+func (r Repo) ListWorktrees(ctx context.Context) ([]WorktreeInfo, error) {
+	out, err := r.Run(ctx, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+
+	var list []WorktreeInfo
+	var cur *WorktreeInfo
+	flush := func() {
+		if cur != nil && cur.Path != "" {
+			list = append(list, *cur)
+		}
+		cur = nil
+	}
+
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimRight(raw, "\r")
+		if strings.TrimSpace(line) == "" {
+			flush()
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			flush()
+			p := strings.TrimPrefix(line, "worktree ")
+			cur = &WorktreeInfo{Path: filepath.Clean(filepath.FromSlash(p))}
+		case cur != nil && strings.HasPrefix(line, "HEAD "):
+			cur.Head = strings.TrimPrefix(line, "HEAD ")
+		case cur != nil && strings.HasPrefix(line, "branch "):
+			br := strings.TrimPrefix(line, "branch ")
+			cur.Branch = strings.TrimPrefix(br, "refs/heads/")
+		}
+	}
+	flush()
+	return list, nil
+}
+
+// ListWeaverBranches returns short branch names matching "weaver/...".
+func (r Repo) ListWeaverBranches(ctx context.Context) ([]string, error) {
+	out, err := r.Run(ctx, "for-each-ref", "--format=%(refname:short)", WeaverRefPrefix)
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	lines := strings.Split(out, "\n")
+	branches := make([]string, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(strings.TrimRight(raw, "\r"))
+		if line != "" {
+			branches = append(branches, line)
+		}
+	}
+	return branches, nil
 }
 
 // DeleteBranch forcefully deletes branch name (-D).
