@@ -125,8 +125,8 @@ func newFakeRun(sid string, rawLines []string, final provider.Final) *fakeRun {
 }
 
 func (r *fakeRun) Events() <-chan provider.Event { return r.events }
-func (r *fakeRun) Send(string) error           { return nil }
-func (r *fakeRun) SessionID() string           { return r.sessionID }
+func (r *fakeRun) Send(string) error             { return nil }
+func (r *fakeRun) SessionID() string             { return r.sessionID }
 func (r *fakeRun) Wait() provider.Final {
 	<-r.done
 	return r.final
@@ -248,6 +248,7 @@ func TestApprovalCancel(t *testing.T) {
 	ctx := context.Background()
 	r := newTestRepo(t)
 	st := run.Store{Root: filepath.Join(r.Dir, ".weaver", "runs")}
+
 	app := &fakeApprover{
 		approved: true,
 		blockCh:  make(chan struct{}),
@@ -362,5 +363,104 @@ func TestCloseDeletesEmptyRun(t *testing.T) {
 	}
 	if _, err := r.RevParse(ctx, "refs/heads/"+integBranch); err == nil {
 		t.Fatalf("integration branch %s still exists after Close()", integBranch)
+	}
+}
+
+func TestRunSnapshotReportsPhaseAndMergedTasks(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	st := run.Store{Root: filepath.Join(r.Dir, ".weaver", "runs")}
+
+	prov := &fakeProvider{
+		name: "codex",
+		handler: func(call int, ctx context.Context, req provider.RunRequest) (provider.Run, error) {
+			if err := os.WriteFile(filepath.Join(req.Dir, "t1.txt"), []byte("t1\n"), 0o644); err != nil {
+				return nil, err
+			}
+			wt, err := gitx.Open(req.Dir)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := wt.CommitAll(ctx, "add t1.txt"); err != nil {
+				return nil, err
+			}
+			sha, err := wt.RevParse(ctx, "HEAD")
+			if err != nil {
+				return nil, err
+			}
+			return newFakeRun("sid-snap", []string{`{"ok":1}`}, provider.Final{
+				Text:      receiptBlock("T1", "done", "t1.txt", []string{sha}, "echo ok"),
+				SessionID: "sid-snap",
+			}), nil
+		},
+	}
+
+	eng, err := New(ctx, Options{
+		Cfg:       testConfig(),
+		Repo:      r,
+		Store:     st,
+		Providers: map[string]provider.Provider{"codex": prov},
+		Approver:  &fakeApprover{approved: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close(ctx)
+
+	if _, err := eng.StartRun(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := eng.RequestApproval(ctx, ApprovalRequest{Kind: "spec", Path: "docs/specs/demo.md", Summary: "spec"}); err != nil {
+		t.Fatal(err)
+	}
+	plan := &run.Plan{
+		Tasks: []*run.Task{
+			{ID: "T1", Title: "Primera", Role: "implementer", SpecRefs: []string{"REQ-1"}, Checks: []string{"echo ok"}},
+			{ID: "T2", Title: "Segunda", Role: "implementer", DependsOn: []string{"T1"}, SpecRefs: []string{"REQ-1"}, Checks: []string{"echo ok"}},
+		},
+		GlobalChecks: []string{"echo ok"},
+	}
+	if _, _, err := eng.RequestApproval(ctx, ApprovalRequest{Kind: "plan", Path: "docs/plans/demo.md", Summary: "plan", Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+
+	id, err := eng.Spawn(ctx, "T1", "", "", "", "haz T1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = eng.Wait(ctx, []string{id}, 10*time.Second)
+	if err := eng.AcceptTask(ctx, "T1", id); err != nil {
+		t.Fatal(err)
+	}
+
+	sessRepo, err := gitx.Open(eng.State().SessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessRepo.MergeFFOnly(ctx, eng.State().Agent(id).Branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Cleanup(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := eng.RunSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("RunSnapshot() error: %v", err)
+	}
+	if snap.Phase != string(run.PhasePlanApproved) {
+		t.Fatalf("snap.Phase = %q, want %q", snap.Phase, run.PhasePlanApproved)
+	}
+	if snap.SpecPath != "docs/specs/demo.md" {
+		t.Fatalf("snap.SpecPath = %q, want docs/specs/demo.md", snap.SpecPath)
+	}
+	if len(snap.Tasks) != 2 {
+		t.Fatalf("len(snap.Tasks) = %d, want 2", len(snap.Tasks))
+	}
+	if snap.Tasks[0].ID != "T1" || snap.Tasks[0].Status != string(run.TaskAccepted) || !snap.Tasks[0].Merged || snap.Tasks[0].AcceptedAgent != id {
+		t.Fatalf("unexpected T1 snapshot: %+v", snap.Tasks[0])
+	}
+	if snap.Tasks[1].ID != "T2" || snap.Tasks[1].Status != string(run.TaskPending) || snap.Tasks[1].Merged {
+		t.Fatalf("unexpected T2 snapshot: %+v", snap.Tasks[1])
 	}
 }

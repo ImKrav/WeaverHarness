@@ -43,18 +43,20 @@ type stubRun struct {
 }
 
 func (r *stubRun) Events() <-chan provider.Event { return r.events }
-func (r *stubRun) Send(string) error           { return nil }
-func (r *stubRun) SessionID() string           { return r.final.SessionID }
-func (r *stubRun) Wait() provider.Final        { return r.final }
-func (r *stubRun) Kill() error                 { return nil }
+func (r *stubRun) Send(string) error             { return nil }
+func (r *stubRun) SessionID() string             { return r.final.SessionID }
+func (r *stubRun) Wait() provider.Final          { return r.final }
+func (r *stubRun) Kill() error                   { return nil }
 
 type stubProvider struct {
 	name    string
 	handler func(context.Context, provider.RunRequest) (provider.Run, error)
 }
 
-func (p *stubProvider) Name() string                       { return p.name }
-func (p *stubProvider) Check(context.Context) provider.Health { return provider.Health{Installed: true, LoggedIn: true} }
+func (p *stubProvider) Name() string { return p.name }
+func (p *stubProvider) Check(context.Context) provider.Health {
+	return provider.Health{Installed: true, LoggedIn: true}
+}
 func (p *stubProvider) Start(ctx context.Context, req provider.RunRequest) (provider.Run, error) {
 	return p.handler(ctx, req)
 }
@@ -210,11 +212,50 @@ func TestToolsListed(t *testing.T) {
 		"cleanup_agent",
 		"follow_up",
 		"request_approval",
+		"run_state",
 		"spawn_agent",
 		"wait_agents",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("tools = %v, want %v", got, want)
+	}
+}
+
+func TestMCPRunStateListedAndCallable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := newTestEngine(t, nil)
+	url, token, err := Listen(ctx, NewHandler(eng))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := connectTestClient(t, url, token)
+
+	if res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "request_approval",
+		Arguments: map[string]any{"kind": "spec", "path": "docs/specs/s.md", "summary": "spec"},
+	}); err != nil || res.IsError {
+		t.Fatalf("spec approval failed: err=%v res=%+v", err, res)
+	}
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "run_state",
+		Arguments: map[string]any{},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("run_state failed: err=%v res=%+v", err, res)
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("unexpected content: %+v", res.Content)
+	}
+	var snap engine.RunSnapshot
+	if err := json.Unmarshal([]byte(tc.Text), &snap); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, tc.Text)
+	}
+	if snap.Phase != string(run.PhaseSpecApproved) || snap.SpecPath != "docs/specs/s.md" {
+		t.Fatalf("unexpected snap: %+v", snap)
 	}
 }
 

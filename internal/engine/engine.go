@@ -53,11 +53,34 @@ type AgentInfo struct {
 
 // AgentResult is returned by Wait for each requested agent ID.
 type AgentResult struct {
-	ID           string                `json:"id"`
-	Status       string                `json:"status"`
-	Err          string                `json:"err,omitempty"`
-	Receipt      *receipt.Receipt      `json:"receipt,omitempty"`
-	Verification *verify.Verification  `json:"verification,omitempty"`
+	ID           string               `json:"id"`
+	Status       string               `json:"status"`
+	Err          string               `json:"err,omitempty"`
+	Receipt      *receipt.Receipt     `json:"receipt,omitempty"`
+	Verification *verify.Verification `json:"verification,omitempty"`
+}
+
+// TaskSnapshot summarizes one plan task and whether its accepted agent is merged.
+type TaskSnapshot struct {
+	ID            string   `json:"id"`
+	Title         string   `json:"title"`
+	Role          string   `json:"role"`
+	DependsOn     []string `json:"depends_on,omitempty"`
+	Status        string   `json:"status"`
+	Rounds        int      `json:"rounds"`
+	AcceptedAgent string   `json:"accepted_agent,omitempty"`
+	Merged        bool     `json:"merged"`
+}
+
+// RunSnapshot summarizes the active run's SDD phase, plan tasks, and subagents.
+type RunSnapshot struct {
+	RunID             string         `json:"run_id"`
+	Phase             string         `json:"phase"`
+	BaseBranch        string         `json:"base_branch"`
+	IntegrationBranch string         `json:"integration_branch"`
+	SpecPath          string         `json:"spec_path,omitempty"`
+	Tasks             []TaskSnapshot `json:"tasks"`
+	Agents            []AgentInfo    `json:"agents"`
 }
 
 // Options configures an Engine instance.
@@ -262,6 +285,64 @@ func (e *Engine) State() *run.State {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.state
+}
+
+// RunSnapshot returns a consistent view of the active run phase, tasks, merge status, and subagents.
+func (e *Engine) RunSnapshot(ctx context.Context) (RunSnapshot, error) {
+	type mergeCheck struct {
+		idx          int
+		branch       string
+		mergedCommit string
+	}
+
+	e.mu.Lock()
+	if e.state == nil {
+		e.mu.Unlock()
+		return RunSnapshot{}, errors.New("engine: no hay ejecución activa")
+	}
+
+	snap := RunSnapshot{
+		RunID:             e.state.RunID,
+		Phase:             string(e.state.Phase),
+		BaseBranch:        e.state.BaseBranch,
+		IntegrationBranch: e.state.IntegrationBranch,
+		SpecPath:          e.latestApprovedSpecLocked(),
+		Tasks:             []TaskSnapshot{},
+		Agents:            e.snapshotInfosLocked(),
+	}
+
+	var checks []mergeCheck
+	if e.state.Plan != nil {
+		snap.Tasks = make([]TaskSnapshot, 0, len(e.state.Plan.Tasks))
+		for _, t := range e.state.Plan.Tasks {
+			ts := TaskSnapshot{
+				ID:            t.ID,
+				Title:         t.Title,
+				Role:          t.Role,
+				DependsOn:     append([]string(nil), t.DependsOn...),
+				Status:        string(t.Status),
+				Rounds:        t.Rounds,
+				AcceptedAgent: t.AcceptedAgent,
+			}
+			if t.Status == run.TaskAccepted && t.AcceptedAgent != "" {
+				if ag := e.state.Agent(t.AcceptedAgent); ag != nil {
+					checks = append(checks, mergeCheck{
+						idx:          len(snap.Tasks),
+						branch:       ag.Branch,
+						mergedCommit: ag.MergedCommit,
+					})
+				}
+			}
+			snap.Tasks = append(snap.Tasks, ts)
+		}
+	}
+	integBranch := e.state.IntegrationBranch
+	e.mu.Unlock()
+
+	for _, c := range checks {
+		snap.Tasks[c.idx].Merged = e.isAgentMerged(ctx, c.branch, c.mergedCommit, integBranch)
+	}
+	return snap, nil
 }
 
 // SetOrchestratorSessionID persists the orchestrator's CLI session ID safely.

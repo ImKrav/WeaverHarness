@@ -75,6 +75,8 @@ type agentStatusOut struct {
 	Agents []engine.AgentInfo `json:"agents"`
 }
 
+type runStateIn struct{}
+
 type agentIDIn struct {
 	AgentID string `json:"agent_id" jsonschema:"id del subagente"`
 }
@@ -176,6 +178,17 @@ func registerTools(srv *mcp.Server, e *engine.Engine) {
 		Description: "Consulta el estado resumido de uno o todos los subagentes",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in agentStatusIn) (*mcp.CallToolResult, agentStatusOut, error) {
 		return nil, agentStatusOut{Agents: e.Status(in.AgentID)}, nil
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "run_state",
+		Description: "Consulta la fase actual de la ejecución, tareas del plan, dependencias mergeadas y subagentes",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ runStateIn) (*mcp.CallToolResult, engine.RunSnapshot, error) {
+		snap, err := e.RunSnapshot(ctx)
+		if err != nil {
+			return toolErr[engine.RunSnapshot](err)
+		}
+		return nil, snap, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
