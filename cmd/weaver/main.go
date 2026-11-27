@@ -18,6 +18,7 @@ var (
 )
 
 type cliDeps struct {
+	ctx    context.Context
 	getwd  func() (string, error)
 	stdin  io.Reader
 	stdout io.Writer
@@ -53,7 +54,11 @@ func main() {
 }
 
 func runMain(args []string) int {
+	ctx, cancel := signal.NotifyContext(context.Background(), shutdownSignals()...)
+	defer cancel()
+
 	return runMainWith(args, cliDeps{
+		ctx:    ctx,
 		getwd:  os.Getwd,
 		stdin:  os.Stdin,
 		stdout: os.Stdout,
@@ -62,6 +67,9 @@ func runMain(args []string) int {
 }
 
 func runMainWith(args []string, deps cliDeps) int {
+	if deps.ctx == nil {
+		deps.ctx = context.Background()
+	}
 	if deps.getwd == nil {
 		deps.getwd = os.Getwd
 	}
@@ -119,7 +127,7 @@ func runMainWith(args []string, deps cliDeps) int {
 	}
 
 	if len(rest) == 0 {
-		if err := app.RunSession(context.Background(), app.SessionOptions{
+		if err := app.RunSession(deps.ctx, app.SessionOptions{
 			Dir:           cwd,
 			Preset:        preset,
 			SkipPreflight: skipCheck,
@@ -160,7 +168,7 @@ func runMainWith(args []string, deps cliDeps) int {
 		if sub.NArg() == 1 {
 			runID = sub.Arg(0)
 		}
-		if err := app.RunSession(context.Background(), app.SessionOptions{
+		if err := app.RunSession(deps.ctx, app.SessionOptions{
 			Dir:           cwd,
 			Resume:        true,
 			ResumeID:      runID,
@@ -279,7 +287,7 @@ func runMainWith(args []string, deps cliDeps) int {
 			sub.Usage()
 			return 2
 		}
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		ctx, cancel := signal.NotifyContext(deps.ctx, shutdownSignals()...)
 		defer cancel()
 		if err := app.Clean(ctx, app.CleanOptions{
 			Dir:    cwd,
@@ -376,7 +384,7 @@ func runMainWith(args []string, deps cliDeps) int {
 			_, _ = fmt.Fprintf(deps.stderr, "Uso: weaver doctor\n")
 			return 2
 		}
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		ctx, cancel := signal.NotifyContext(deps.ctx, shutdownSignals()...)
 		defer cancel()
 		return app.Doctor(ctx, cwd, deps.stdout)
 

@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -109,5 +112,15 @@ func TestLogsBadArgCountExitTwo(t *testing.T) {
 		if code != 2 {
 			t.Fatalf("%v exit code = %d, want 2 (stderr=%q)", args, code, stderr.String())
 		}
+	}
+}
+
+func TestShutdownSignalsIncludesPlatformSignals(t *testing.T) {
+	sigs := shutdownSignals()
+	if !slices.Contains(sigs, os.Interrupt) {
+		t.Fatalf("shutdownSignals() = %v, missing os.Interrupt", sigs)
+	}
+	if runtime.GOOS != "windows" && len(sigs) < 2 {
+		t.Fatalf("shutdownSignals() on %s = %v, want at least Interrupt + SIGTERM", runtime.GOOS, sigs)
 	}
 }

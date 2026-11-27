@@ -295,7 +295,7 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 		orchRun:  orchRun,
 		resume:   o.Resume,
 	}))
-	progOpts := []tea.ProgramOption{tea.WithAltScreen()}
+	progOpts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
 	if !o.NoMouse {
 		progOpts = append(progOpts, tea.WithMouseCellMotion())
 	}
@@ -318,7 +318,14 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 	_, runErr := p.Run()
 	_ = orchRun.Kill()
 	<-fwdDone
-	return runErr
+	return normalizeTUIExitErr(ctx, runErr)
+}
+
+func normalizeTUIExitErr(ctx context.Context, err error) error {
+	if err != nil && ctx != nil && ctx.Err() != nil && errors.Is(err, tea.ErrProgramKilled) {
+		return nil
+	}
+	return err
 }
 
 func buildTUIOptions(p tuiSessionParams) tui.Options {

@@ -20,6 +20,7 @@ import (
 	"github.com/ImKrav/weaverharness/internal/gitx"
 	"github.com/ImKrav/weaverharness/internal/provider"
 	"github.com/ImKrav/weaverharness/internal/run"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func newAppTestRepo(t *testing.T) gitx.Repo {
@@ -399,5 +400,64 @@ func TestResumeLoadsPreviousChatHistory(t *testing.T) {
 	})
 	if len(optsNoResume.InitialChat) != 0 {
 		t.Fatalf("InitialChat len with resume=false = %d, want 0", len(optsNoResume.InitialChat))
+	}
+}
+
+func TestNormalizeTUIExitErrHandlesSignalKill(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := normalizeTUIExitErr(ctx, tea.ErrProgramKilled); err != nil {
+		t.Fatalf("normalizeTUIExitErr(canceled, ErrProgramKilled) = %v, want nil", err)
+	}
+
+	other := errors.New("terminal broken")
+	if err := normalizeTUIExitErr(ctx, other); !errors.Is(err, other) {
+		t.Fatalf("normalizeTUIExitErr(canceled, other) = %v, want %v", err, other)
+	}
+
+	if err := normalizeTUIExitErr(context.Background(), tea.ErrProgramKilled); !errors.Is(err, tea.ErrProgramKilled) {
+		t.Fatalf("normalizeTUIExitErr(active, ErrProgramKilled) = %v, want ErrProgramKilled", err)
+	}
+}
+
+func TestRunSessionHeadlessCancelsCleanlyOnContextCancel(t *testing.T) {
+	r := newAppTestRepo(t)
+	fakeBin := buildFakeCLI(t)
+
+	cfgDir := filepath.Join(r.Dir, ".weaver")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgTOML := "[providers.claude]\nbin = '" + fakeBin + "'\n"
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(cfgTOML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("FAKECLI_ECHO", "1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var cancelAt time.Time
+	err := RunSession(ctx, SessionOptions{
+		Dir:           r.Dir,
+		SkipPreflight: true,
+		In:            strings.NewReader("s\n"),
+		Out:           &bytes.Buffer{},
+		Headless: func(send func(string) error, events <-chan provider.Event) error {
+			cancelAt = time.Now()
+			cancel()
+			for range events {
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunSession() on canceled ctx = %v, want nil", err)
+	}
+	if elapsed := time.Since(cancelAt); elapsed > 5*time.Second {
+		t.Fatalf("RunSession() took %v to cancel cleanly", elapsed)
 	}
 }
