@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAgyOrchestratorRejected(t *testing.T) {
@@ -211,5 +213,49 @@ func TestAgyInvalidModel(t *testing.T) {
 	final := run.Wait()
 	if final.Err == nil || final.Err.Class != ModelUnknown {
 		t.Fatalf("final.Err = %+v, want ModelUnknown", final.Err)
+	}
+}
+
+func TestAgyRejectsOversizedLine(t *testing.T) {
+	origLimit := jsonLineLimit
+	jsonLineLimit = 512
+	t.Cleanup(func() { jsonLineLimit = origLimit })
+
+	dir := t.TempDir()
+	fixPath := filepath.Join(dir, "agy_oversized.jsonl")
+	line := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sid-big","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + strings.Repeat("a", 2048) + `"}}}}` + "\n"
+	if err := os.WriteFile(fixPath, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("FAKECLI_ACP", "1")
+	t.Setenv("FAKECLI_FIXTURE", fixPath)
+
+	p, err := New("antigravity", fakeCLIBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseG := runtime.NumGoroutine()
+	r, err := p.Start(context.Background(), RunRequest{
+		Mode:   Worker,
+		Dir:    dir,
+		Model:  "gemini-4-hydrogen",
+		Prompt: "Hola",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range r.Events() {
+	}
+	final := r.Wait()
+	if final.Err == nil || final.Err.Class != Crashed {
+		t.Fatalf("final.Err = %+v, want Crashed", final.Err)
+	}
+
+	for i := 0; i < 20 && runtime.NumGoroutine() > baseG; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if gotG := runtime.NumGoroutine(); gotG > baseG {
+		t.Fatalf("goroutine leak after oversized agy JSONL line: before=%d after=%d", baseG, gotG)
 	}
 }

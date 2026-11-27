@@ -1,11 +1,13 @@
 package provider
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -405,4 +407,64 @@ func TestOrchestratorSend(t *testing.T) {
 	for range run.Events() {
 	}
 	_ = run.Wait()
+}
+
+func TestReadLineLimitedRejectsOversizedLine(t *testing.T) {
+	// 2 MiB line with CRLF passes under 16 MiB default limit.
+	twoMB := strings.Repeat("a", 2*1024*1024) + "\r\n"
+	got, err := readLineLimited(bufio.NewReader(strings.NewReader(twoMB)), maxJSONLLineBytes)
+	if err != nil {
+		t.Fatalf("readLineLimited(2MB) error = %v, want nil", err)
+	}
+	if len(got) != len(twoMB) {
+		t.Fatalf("readLineLimited(2MB) len = %d, want %d", len(got), len(twoMB))
+	}
+
+	// Oversized line exceeding configured limit returns errLineTooLong.
+	over := strings.Repeat("b", 2048) + "\n"
+	_, err = readLineLimited(bufio.NewReader(strings.NewReader(over)), 1024)
+	if !errors.Is(err, errLineTooLong) {
+		t.Fatalf("readLineLimited(over) err = %v, want errLineTooLong", err)
+	}
+
+	// End-to-end jsonlRun terminates child and returns Crashed without goroutine leak.
+	origLimit := jsonLineLimit
+	jsonLineLimit = 512
+	t.Cleanup(func() { jsonLineLimit = origLimit })
+
+	dir := t.TempDir()
+	fixPath := filepath.Join(dir, "oversized.jsonl")
+	hugeLine := `{"type":"assistant","message":{"content":[{"type":"text","text":"` + strings.Repeat("z", 2048) + `"}]},"session_id":"s-over"}` + "\n"
+	if err := os.WriteFile(fixPath, []byte(hugeLine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKECLI_FIXTURE", fixPath)
+
+	p, err := New("claude", fakeCLIBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseG := runtime.NumGoroutine()
+	r, err := p.Start(context.Background(), RunRequest{
+		Mode:   Worker,
+		Dir:    dir,
+		Model:  "opus",
+		Prompt: "hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range r.Events() {
+	}
+	final := r.Wait()
+	if final.Err == nil || final.Err.Class != Crashed {
+		t.Fatalf("final.Err = %+v, want Crashed", final.Err)
+	}
+
+	for i := 0; i < 20 && runtime.NumGoroutine() > baseG; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if gotG := runtime.NumGoroutine(); gotG > baseG {
+		t.Fatalf("goroutine leak after oversized JSONL line: before=%d after=%d", baseG, gotG)
+	}
 }

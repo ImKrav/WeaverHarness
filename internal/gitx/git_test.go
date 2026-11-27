@@ -279,3 +279,33 @@ func TestAttachWorktree(t *testing.T) {
 		t.Fatalf("attached HEAD = %s, want %s", gotSHA, wantSHA)
 	}
 }
+
+func TestAddWorktreePrunesStaleRegistration(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+
+	wtPath := filepath.Join(WeaverDir(r.Dir), "stale-wt")
+	t.Cleanup(func() {
+		_ = r.RemoveWorktree(ctx, wtPath)
+		_ = os.RemoveAll(WeaverDir(r.Dir))
+	})
+
+	if err := r.AddWorktree(ctx, wtPath, "weaver/stale-1", "main"); err != nil {
+		t.Fatalf("initial AddWorktree() error: %v", err)
+	}
+	if err := os.RemoveAll(wtPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.AddWorktree(ctx, wtPath, "weaver/stale-2", "main"); err != nil {
+		t.Fatalf("AddWorktree() after stale directory deletion error: %v", err)
+	}
+	wtRepo, err := Open(wtPath)
+	if err != nil {
+		t.Fatalf("Open(wtPath) error: %v", err)
+	}
+	br, err := wtRepo.CurrentBranch(ctx)
+	if err != nil || br != "weaver/stale-2" {
+		t.Fatalf("CurrentBranch() = (%q, %v), want weaver/stale-2", br, err)
+	}
+}

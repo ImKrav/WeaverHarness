@@ -255,7 +255,7 @@ func (r *agyRun) drive(
 
 	readMsg := func() (*acpRPCMsg, error) {
 		for {
-			line, err := reader.ReadBytes('\n')
+			line, err := readLineLimited(reader, jsonLineLimit)
 			if len(line) > 0 {
 				trimmed := bytes.TrimRight(line, "\r\n")
 				sawLine = true
@@ -271,6 +271,10 @@ func (r *agyRun) drive(
 				}
 			}
 			if err != nil {
+				if errors.Is(err, errLineTooLong) {
+					finalErr = &ProviderError{Class: Crashed, Msg: err.Error()}
+					_ = r.Kill()
+				}
 				return nil, err
 			}
 		}
@@ -407,14 +411,14 @@ func (r *agyRun) drive(
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		final.Err = &ProviderError{Class: Timeout, Msg: "tiempo de espera agotado"}
+	case finalErr != nil:
+		final.Err = finalErr
 	case !sawLine:
 		if code != 0 && stderrStr != "" {
 			final.Err = &ProviderError{Class: Classify(stderrStr), Msg: stderrStr}
 		} else {
 			final.Err = &ProviderError{Class: EmptyOutput, Msg: "el CLI terminó sin salida"}
 		}
-	case finalErr != nil:
-		final.Err = finalErr
 	case !hasPromptResult:
 		if code != 0 && stderrStr != "" {
 			final.Err = &ProviderError{Class: Classify(stderrStr), Msg: stderrStr}

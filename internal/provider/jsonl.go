@@ -17,7 +17,33 @@ import (
 const (
 	maxStderrTailBytes = 4096
 	eventBufferSize    = 64
+	maxJSONLLineBytes  = 16 * 1024 * 1024 // 16 MiB
 )
+
+var (
+	errLineTooLong = errors.New("línea JSONL excede el tamaño máximo permitido")
+	jsonLineLimit  = maxJSONLLineBytes
+)
+
+func readLineLimited(r *bufio.Reader, limit int) ([]byte, error) {
+	var out []byte
+	for {
+		frag, err := r.ReadSlice('\n')
+		if len(frag) > 0 {
+			if limit > 0 && len(out)+len(frag) > limit {
+				return nil, errLineTooLong
+			}
+			out = append(out, frag...)
+		}
+		if err == nil {
+			return out, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return out, err
+	}
+}
 
 type jsonlState struct {
 	SessionID string
@@ -140,7 +166,7 @@ func (r *jsonlRun) pump(
 	reader := bufio.NewReader(stdout)
 
 	for {
-		line, err := reader.ReadBytes('\n')
+		line, err := readLineLimited(reader, jsonLineLimit)
 		if len(line) > 0 {
 			trimmed := bytes.TrimRight(line, "\r\n")
 			state.SawLine = true
@@ -162,6 +188,10 @@ func (r *jsonlRun) pump(
 			}
 		}
 		if err != nil {
+			if errors.Is(err, errLineTooLong) {
+				state.FinalErr = &ProviderError{Class: Crashed, Msg: err.Error()}
+				_ = r.Kill()
+			}
 			break
 		}
 	}
@@ -180,14 +210,14 @@ func (r *jsonlRun) pump(
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		final.Err = &ProviderError{Class: Timeout, Msg: "tiempo de espera agotado"}
+	case state.FinalErr != nil:
+		final.Err = state.FinalErr
 	case !state.SawLine:
 		if code != 0 && stderrStr != "" {
 			final.Err = &ProviderError{Class: Classify(stderrStr), Msg: stderrStr}
 		} else {
 			final.Err = &ProviderError{Class: EmptyOutput, Msg: "el CLI terminó sin salida"}
 		}
-	case state.FinalErr != nil:
-		final.Err = state.FinalErr
 	case code != 0:
 		msg := stderrStr
 		if msg == "" {

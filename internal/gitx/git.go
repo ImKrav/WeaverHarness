@@ -25,7 +25,7 @@ type Repo struct {
 // WorktreeInfo describes one git worktree entry reported by git worktree list.
 type WorktreeInfo struct {
 	Path   string
-	Branch string // nombre corto sin "refs/heads/", vacío si detached
+	Branch string // nombre corto sin "refs/heads/", vacÃ­o si detached
 	Head   string
 }
 
@@ -91,12 +91,22 @@ func (r Repo) RevParse(ctx context.Context, ref string) (string, error) {
 	return r.Run(ctx, "rev-parse", "--verify", ref)
 }
 
-// AddWorktree creates a new git worktree at path on a new branch rooted at base.
+// AddWorktree creates a new git worktree at path on a new branch rooted at base, pruning stale registrations once on failure.
 func (r Repo) AddWorktree(ctx context.Context, path, newBranch, base string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("gitx: mkdir worktree parent: %w", err)
 	}
+	_, branchBeforeErr := r.RevParse(ctx, "refs/heads/"+newBranch)
 	_, err := r.Run(ctx, "worktree", "add", "-b", newBranch, path, base)
+	if err != nil {
+		if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+			_, _ = r.Run(ctx, "worktree", "prune")
+			if branchBeforeErr != nil {
+				_ = r.DeleteBranch(ctx, newBranch)
+			}
+			_, err = r.Run(ctx, "worktree", "add", "-b", newBranch, path, base)
+		}
+	}
 	return err
 }
 
