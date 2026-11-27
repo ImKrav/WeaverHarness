@@ -77,6 +77,18 @@ type agentStatusOut struct {
 
 type runStateIn struct{}
 
+type agentDiffIn struct {
+	AgentID  string `json:"agent_id" jsonschema:"id del subagente"`
+	Path     string `json:"path,omitempty" jsonschema:"ruta relativa opcional para filtrar el diff"`
+	MaxBytes int    `json:"max_bytes,omitempty" jsonschema:"tamaño máximo en bytes (por defecto 32768, máximo 65536)"`
+}
+
+type agentDiffOut struct {
+	AgentID   string `json:"agent_id"`
+	Diff      string `json:"diff"`
+	Truncated bool   `json:"truncated"`
+}
+
 type agentIDIn struct {
 	AgentID string `json:"agent_id" jsonschema:"id del subagente"`
 }
@@ -143,7 +155,7 @@ func registerTools(srv *mcp.Server, e *engine.Engine) {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "wait_agents",
-		Description: "Espera a que terminen los subagentes indicados y devuelve solo recibos y verificación",
+		Description: "Espera a que terminen los subagentes indicados y devuelve solo recibos, verificación y diff_stat",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in waitAgentsIn) (*mcp.CallToolResult, waitAgentsOut, error) {
 		timeout := 60 * time.Second
 		if in.TimeoutS > 0 {
@@ -178,6 +190,21 @@ func registerTools(srv *mcp.Server, e *engine.Engine) {
 		Description: "Consulta el estado resumido de uno o todos los subagentes",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in agentStatusIn) (*mcp.CallToolResult, agentStatusOut, error) {
 		return nil, agentStatusOut{Agents: e.Status(in.AgentID)}, nil
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "agent_diff",
+		Description: "Obtiene el parche git diff de un subagente, opcionalmente filtrado por ruta y truncado de forma segura",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in agentDiffIn) (*mcp.CallToolResult, agentDiffOut, error) {
+		diff, truncated, err := e.AgentDiff(ctx, in.AgentID, in.Path, in.MaxBytes)
+		if err != nil {
+			return toolErr[agentDiffOut](err)
+		}
+		return nil, agentDiffOut{
+			AgentID:   in.AgentID,
+			Diff:      diff,
+			Truncated: truncated,
+		}, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{

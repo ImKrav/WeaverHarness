@@ -187,3 +187,46 @@ func TestMergeFFOnly(t *testing.T) {
 		t.Fatal("MergeFFOnly(divergent) succeeded, want error")
 	}
 }
+
+func TestRepoDiffAndDiffStat(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+
+	if err := r.SwitchNew(ctx, "feat", "main"); err != nil {
+		t.Fatal(err)
+	}
+	accentName := "nota rápida.txt"
+	if err := os.WriteFile(filepath.Join(r.Dir, accentName), []byte("línea 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.Dir, "otro.txt"), []byte("dos\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitAll(ctx, "add two files"); err != nil {
+		t.Fatal(err)
+	}
+
+	stat, err := r.DiffStat(ctx, "main", "feat")
+	if err != nil {
+		t.Fatalf("DiffStat() error: %v", err)
+	}
+	if !strings.Contains(stat, accentName) || !strings.Contains(stat, "otro.txt") {
+		t.Fatalf("DiffStat() = %q, want both %q and otro.txt", stat, accentName)
+	}
+
+	full, err := r.Diff(ctx, "main", "feat", "")
+	if err != nil {
+		t.Fatalf("Diff(all) error: %v", err)
+	}
+	if !strings.Contains(full, accentName) || !strings.Contains(full, "otro.txt") {
+		t.Fatalf("Diff(all) = %q, want both files", full)
+	}
+
+	filtered, err := r.Diff(ctx, "main", "feat", accentName)
+	if err != nil {
+		t.Fatalf("Diff(filtered) error: %v", err)
+	}
+	if !strings.Contains(filtered, accentName) || strings.Contains(filtered, "otro.txt") {
+		t.Fatalf("Diff(filtered) = %q, want only %q", filtered, accentName)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -618,5 +619,114 @@ func TestSpawnDepAfterCleanup(t *testing.T) {
 	res := eng.Wait(ctx, []string{a2}, 10*time.Second)
 	if len(res) != 1 || res[0].Status != string(run.AgentFinished) {
 		t.Fatalf("T2 Wait() = %+v", res)
+	}
+}
+
+func TestWaitAgentsIncludesDiffStatAndNoTranscript(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		name: "codex",
+		handler: func(call int, ctx context.Context, req provider.RunRequest) (provider.Run, error) {
+			if err := os.WriteFile(filepath.Join(req.Dir, "hola.txt"), []byte("hola mundo\n"), 0o644); err != nil {
+				return nil, err
+			}
+			wt, err := gitx.Open(req.Dir)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := wt.CommitAll(ctx, "add hola"); err != nil {
+				return nil, err
+			}
+			sha, _ := wt.RevParse(ctx, "HEAD")
+			return newFakeRun("sid-ds", []string{`{"secret":"TRANSCRIPT-ONLY"}`}, provider.Final{
+				Text:      receiptBlock("T1", "done", "hola.txt", []string{sha}, "echo ok"),
+				SessionID: "sid-ds",
+			}), nil
+		},
+	}
+
+	eng, _, _ := setupPlanApprovedEngine(t, testConfig(), prov, nil)
+	id, err := eng.Spawn(ctx, "T1", "", "", "", "crea hola.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := eng.Wait(ctx, []string{id}, 10*time.Second)
+	if len(res) != 1 || !strings.Contains(res[0].DiffStat, "hola.txt") {
+		t.Fatalf("Wait() DiffStat = %q, want hola.txt", res[0].DiffStat)
+	}
+	if strings.Contains(res[0].DiffStat, "TRANSCRIPT-ONLY") {
+		t.Fatalf("DiffStat leaked transcript: %q", res[0].DiffStat)
+	}
+
+	sessRepo, err := gitx.Open(eng.State().SessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessRepo.MergeFFOnly(ctx, eng.State().Agent(id).Branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Cleanup(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	afterCleanup := eng.Wait(ctx, []string{id}, 5*time.Second)
+	if len(afterCleanup) != 1 || !strings.Contains(afterCleanup[0].DiffStat, "hola.txt") {
+		t.Fatalf("Wait() after Cleanup DiffStat = %q, want persisted hola.txt", afterCleanup[0].DiffStat)
+	}
+}
+
+func TestAgentDiffAfterCleanupUsesMergedCommit(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		name: "codex",
+		handler: func(call int, ctx context.Context, req provider.RunRequest) (provider.Run, error) {
+			if err := os.WriteFile(filepath.Join(req.Dir, "uno.txt"), []byte("uno\n"), 0o644); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(req.Dir, "dos.txt"), []byte("dos\n"), 0o644); err != nil {
+				return nil, err
+			}
+			wt, err := gitx.Open(req.Dir)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := wt.CommitAll(ctx, "add dos archivos"); err != nil {
+				return nil, err
+			}
+			sha, _ := wt.RevParse(ctx, "HEAD")
+			return newFakeRun("sid-diff", []string{`{"secret":"TRANSCRIPT-ONLY"}`}, provider.Final{
+				Text:      receiptBlock("T1", "done", "uno.txt", []string{sha}, "echo ok"),
+				SessionID: "sid-diff",
+			}), nil
+		},
+	}
+
+	eng, _, _ := setupPlanApprovedEngine(t, testConfig(), prov, nil)
+	id, err := eng.Spawn(ctx, "T1", "", "", "", "dos archivos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = eng.Wait(ctx, []string{id}, 10*time.Second)
+
+	sessRepo, err := gitx.Open(eng.State().SessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessRepo.MergeFFOnly(ctx, eng.State().Agent(id).Branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Cleanup(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	diff, truncated, err := eng.AgentDiff(ctx, id, "uno.txt", 0)
+	if err != nil {
+		t.Fatalf("AgentDiff() after Cleanup error: %v", err)
+	}
+	if truncated {
+		t.Fatalf("truncated = true, want false")
+	}
+	if !strings.Contains(diff, "uno.txt") || strings.Contains(diff, "dos.txt") {
+		t.Fatalf("filtered AgentDiff() = %q, want only uno.txt", diff)
 	}
 }

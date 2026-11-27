@@ -172,6 +172,20 @@ func (r Repo) DiffNames(ctx context.Context, base, head string) ([]string, error
 	return paths, nil
 }
 
+// DiffStat returns a color-free git diff --stat summary between base and head.
+func (r Repo) DiffStat(ctx context.Context, base, head string) (string, error) {
+	return r.Run(ctx, "-c", "core.quotepath=false", "diff", "--stat", "--no-color", "--no-ext-diff", base+".."+head)
+}
+
+// Diff returns a color-free git patch between base and head, optionally filtered to path.
+func (r Repo) Diff(ctx context.Context, base, head, path string) (string, error) {
+	args := []string{"-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", base + ".." + head}
+	if path != "" {
+		args = append(args, "--", filepath.ToSlash(path))
+	}
+	return r.Run(ctx, args...)
+}
+
 // MergeFFOnly fast-forwards the current branch to ref.
 func (r Repo) MergeFFOnly(ctx context.Context, ref string) error {
 	_, err := r.Run(ctx, "merge", "--ff-only", ref)

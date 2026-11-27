@@ -58,6 +58,7 @@ type AgentResult struct {
 	Err          string               `json:"err,omitempty"`
 	Receipt      *receipt.Receipt     `json:"receipt,omitempty"`
 	Verification *verify.Verification `json:"verification,omitempty"`
+	DiffStat     string               `json:"diff_stat,omitempty"`
 }
 
 // TaskSnapshot summarizes one plan task and whether its accepted agent is merged.

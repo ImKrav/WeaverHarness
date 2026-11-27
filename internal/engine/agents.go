@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ImKrav/weaverharness/internal/gitx"
 	"github.com/ImKrav/weaverharness/internal/prompts"
@@ -15,6 +16,12 @@ import (
 	"github.com/ImKrav/weaverharness/internal/receipt"
 	"github.com/ImKrav/weaverharness/internal/run"
 	"github.com/ImKrav/weaverharness/internal/verify"
+)
+
+const (
+	diffStatMaxBytes         = 4096
+	defaultAgentDiffMaxBytes = 32768
+	maxAgentDiffBytes        = 65536
 )
 
 // Spawn creates a task worktree and launches a subagent asynchronously, respecting max_parallel.
@@ -375,6 +382,14 @@ func (e *Engine) runAgent(
 	ver.RefViolations = violations
 	ver.Finalize()
 
+	// Step 5: persist compact diffstat so wait_agents works after cleanup/resume without locking.
+	if openErr == nil {
+		if stat, statErr := wtRepo.DiffStat(runCtx, base, branch); statErr == nil && stat != "" {
+			stat, _ = truncateUTF8(stat, diffStatMaxBytes)
+			_ = os.WriteFile(filepath.Join(agentDir, "diffstat.txt"), []byte(stat), 0o600)
+		}
+	}
+
 	// Step 6: write receipt.json, verification.json, update state, and notify.
 	_ = writeJSONFile(filepath.Join(agentDir, "receipt.json"), rec)
 	_ = writeJSONFile(filepath.Join(agentDir, "verification.json"), ver)
@@ -564,42 +579,121 @@ waitLoop:
 		}
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	type waitMeta struct {
+		id       string
+		status   string
+		err      string
+		agentDir string
+	}
 
-	results := make([]AgentResult, 0, len(ids))
+	e.mu.Lock()
+	metas := make([]waitMeta, 0, len(ids))
 	for _, id := range ids {
-		res := AgentResult{ID: id}
-		if e.state == nil {
-			results = append(results, res)
-			continue
+		m := waitMeta{id: id}
+		if e.state != nil {
+			ag := e.state.Agent(id)
+			if ag == nil {
+				m.err = "agente desconocido"
+			} else {
+				m.status = string(ag.Status)
+				m.err = ag.Err
+				if ag.Status != run.AgentQueued && ag.Status != run.AgentRunning {
+					m.agentDir = e.store.AgentDir(e.state.RunID, id)
+				}
+			}
 		}
-		ag := e.state.Agent(id)
-		if ag == nil {
-			res.Err = "agente desconocido"
-			results = append(results, res)
-			continue
+		metas = append(metas, m)
+	}
+	e.mu.Unlock()
+
+	results := make([]AgentResult, 0, len(metas))
+	for _, m := range metas {
+		res := AgentResult{
+			ID:     m.id,
+			Status: m.status,
+			Err:    m.err,
 		}
-		res.Status = string(ag.Status)
-		res.Err = ag.Err
-		if ag.Status != run.AgentQueued && ag.Status != run.AgentRunning {
-			dir := e.store.AgentDir(e.state.RunID, id)
-			if recBytes, err := os.ReadFile(filepath.Join(dir, "receipt.json")); err == nil {
+		if m.agentDir != "" {
+			if recBytes, err := os.ReadFile(filepath.Join(m.agentDir, "receipt.json")); err == nil {
 				var rec receipt.Receipt
 				if json.Unmarshal(recBytes, &rec) == nil {
 					res.Receipt = &rec
 				}
 			}
-			if verBytes, err := os.ReadFile(filepath.Join(dir, "verification.json")); err == nil {
+			if verBytes, err := os.ReadFile(filepath.Join(m.agentDir, "verification.json")); err == nil {
 				var ver verify.Verification
 				if json.Unmarshal(verBytes, &ver) == nil {
 					res.Verification = &ver
 				}
 			}
+			if statBytes, err := os.ReadFile(filepath.Join(m.agentDir, "diffstat.txt")); err == nil {
+				res.DiffStat = string(statBytes)
+			}
 		}
 		results = append(results, res)
 	}
 	return results
+}
+
+// AgentDiff returns the git diff for agentID, optionally filtered by path and safely truncated at UTF-8 rune boundaries.
+func (e *Engine) AgentDiff(ctx context.Context, agentID, path string, maxBytes int) (string, bool, error) {
+	e.mu.Lock()
+	if e.state == nil {
+		e.mu.Unlock()
+		return "", false, errors.New("engine: no hay ejecución activa")
+	}
+	ag := e.state.Agent(agentID)
+	if ag == nil {
+		e.mu.Unlock()
+		return "", false, fmt.Errorf("engine: agente desconocido %q", agentID)
+	}
+	base := ag.Base
+	branch := ag.Branch
+	mergedCommit := ag.MergedCommit
+	e.mu.Unlock()
+
+	if maxBytes <= 0 {
+		maxBytes = defaultAgentDiffMaxBytes
+	} else if maxBytes > maxAgentDiffBytes {
+		maxBytes = maxAgentDiffBytes
+	}
+
+	var head string
+	if branch != "" {
+		if _, err := e.repo.RevParse(ctx, "refs/heads/"+branch); err == nil {
+			head = "refs/heads/" + branch
+		}
+	}
+	if head == "" {
+		head = mergedCommit
+	}
+	if head == "" {
+		return "", false, fmt.Errorf("engine: la rama %s del agente %s ya no existe", branch, agentID)
+	}
+
+	raw, err := e.repo.Diff(ctx, base, head, path)
+	if err != nil {
+		return "", false, err
+	}
+	diff, truncated := truncateUTF8(raw, maxBytes)
+	return diff, truncated, nil
+}
+
+func truncateUTF8(s string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 {
+		if s == "" {
+			return "", false
+		}
+		return "", true
+	}
+	if len(s) <= maxBytes {
+		return s, false
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut], true
 }
 
 // AcceptTask marks taskID as accepted after verifying agentID's latest receipt is done and passed verification.

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ImKrav/weaverharness/internal/config"
 	"github.com/ImKrav/weaverharness/internal/engine"
@@ -207,6 +208,7 @@ func TestToolsListed(t *testing.T) {
 	slices.Sort(got)
 	want := []string{
 		"accept_task",
+		"agent_diff",
 		"agent_status",
 		"cancel_agent",
 		"cleanup_agent",
@@ -296,13 +298,25 @@ func TestWaitAgentsNoTranscript(t *testing.T) {
 			ch <- provider.Event{Kind: provider.EventRaw, Raw: []byte(`{"line":"TRANSCRIPT-ONLY-SECRET"}`)}
 			close(ch)
 
+			if err := os.WriteFile(filepath.Join(req.Dir, "hola.txt"), []byte("saludo\n"), 0o644); err != nil {
+				return nil, err
+			}
+			wt, err := gitx.Open(req.Dir)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := wt.CommitAll(ctx, "add hola.txt"); err != nil {
+				return nil, err
+			}
+			sha, _ := wt.RevParse(ctx, "HEAD")
+
 			receiptJSON, _ := json.Marshal(map[string]any{
 				"task_id":      "T1",
 				"status":       "done",
 				"summary":      "listo",
 				"spec_refs":    []string{"REQ-1"},
-				"changes":      []map[string]string{},
-				"commits":      []string{},
+				"changes":      []map[string]string{{"path": "hola.txt", "kind": "added"}},
+				"commits":      []string{sha},
 				"verification": []map[string]any{{"cmd": "echo ok", "exit_code": 0, "output_tail": "ok"}},
 				"open_issues":  []string{},
 			})
@@ -391,5 +405,129 @@ func TestWaitAgentsNoTranscript(t *testing.T) {
 	}
 	if !strings.Contains(combined.String(), "listo") {
 		t.Fatalf("wait_agents missing receipt summary: %s", combined.String())
+	}
+	if !strings.Contains(combined.String(), `"diff_stat"`) || !strings.Contains(combined.String(), "hola.txt") {
+		t.Fatalf("wait_agents missing diff_stat with hola.txt: %s", combined.String())
+	}
+}
+
+func TestMCPAgentDiffTruncatesUTF8AndFiltersPath(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prov := &stubProvider{
+		name: "codex",
+		handler: func(ctx context.Context, req provider.RunRequest) (provider.Run, error) {
+			ch := make(chan provider.Event, 2)
+			ch <- provider.Event{Kind: provider.EventRaw, Raw: []byte(`{"secret":"TRANSCRIPT-ONLY"}`)}
+			close(ch)
+
+			longUTF8 := strings.Repeat("áéíóúñ🚀", 25) + "\n"
+			if err := os.WriteFile(filepath.Join(req.Dir, "largo.txt"), []byte(longUTF8), 0o644); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(req.Dir, "extra.txt"), []byte("ignorar\n"), 0o644); err != nil {
+				return nil, err
+			}
+			wt, err := gitx.Open(req.Dir)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := wt.CommitAll(ctx, "add files"); err != nil {
+				return nil, err
+			}
+			sha, _ := wt.RevParse(ctx, "HEAD")
+
+			receiptJSON, _ := json.Marshal(map[string]any{
+				"task_id":      "T1",
+				"status":       "done",
+				"summary":      "listo",
+				"spec_refs":    []string{"REQ-1"},
+				"changes":      []map[string]string{{"path": "largo.txt", "kind": "added"}},
+				"commits":      []string{sha},
+				"verification": []map[string]any{{"cmd": "echo ok", "exit_code": 0, "output_tail": "ok"}},
+				"open_issues":  []string{},
+			})
+			return &stubRun{
+				events: ch,
+				final: provider.Final{
+					SessionID: "sid-diff",
+					Text:      "```weaver-receipt\n" + string(receiptJSON) + "\n```",
+				},
+			}, nil
+		},
+	}
+
+	eng := newTestEngine(t, prov)
+	url, token, err := Listen(ctx, NewHandler(eng))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := connectTestClient(t, url, token)
+
+	_, _ = sess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "request_approval",
+		Arguments: map[string]any{"kind": "spec", "path": "docs/spec.md", "summary": "spec"},
+	})
+	_, _ = sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "request_approval",
+		Arguments: map[string]any{
+			"kind":    "plan",
+			"path":    "docs/plan.md",
+			"summary": "plan",
+			"tasks": []map[string]any{
+				{"id": "T1", "title": "Primera", "role": "implementer", "checks": []string{"echo ok"}},
+			},
+			"global_checks": []string{"echo ok"},
+		},
+	})
+	spawnRes, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "spawn_agent",
+		Arguments: map[string]any{"task_id": "T1", "instructions": "haz"},
+	})
+	if err != nil || spawnRes.IsError {
+		t.Fatalf("spawn failed: err=%v res=%+v", err, spawnRes)
+	}
+	var spawnOut struct {
+		AgentID string `json:"agent_id"`
+	}
+	_ = json.Unmarshal([]byte(spawnRes.Content[0].(*mcp.TextContent).Text), &spawnOut)
+
+	_, _ = sess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "wait_agents",
+		Arguments: map[string]any{"agent_ids": []string{spawnOut.AgentID}, "timeout_s": 10},
+	})
+
+	const maxBytes = 120
+	diffRes, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "agent_diff",
+		Arguments: map[string]any{
+			"agent_id":  spawnOut.AgentID,
+			"path":      "largo.txt",
+			"max_bytes": maxBytes,
+		},
+	})
+	if err != nil || diffRes.IsError {
+		t.Fatalf("agent_diff failed: err=%v res=%+v", err, diffRes)
+	}
+	var out struct {
+		AgentID   string `json:"agent_id"`
+		Diff      string `json:"diff"`
+		Truncated bool   `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(diffRes.Content[0].(*mcp.TextContent).Text), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.AgentID != spawnOut.AgentID || !out.Truncated {
+		t.Fatalf("unexpected output: %+v", out)
+	}
+	if len(out.Diff) > maxBytes {
+		t.Fatalf("len(Diff) = %d > max_bytes %d", len(out.Diff), maxBytes)
+	}
+	if !utf8.ValidString(out.Diff) {
+		t.Fatalf("Diff is not valid UTF-8 after truncation: %q", out.Diff)
+	}
+	if strings.Contains(out.Diff, "extra.txt") || strings.Contains(out.Diff, "TRANSCRIPT-ONLY") {
+		t.Fatalf("Diff leaked unfiltered file or transcript: %q", out.Diff)
 	}
 }
