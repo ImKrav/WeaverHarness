@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check go.mod and go.sum
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Run tests (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: go test -race -shuffle=on -count=1 -timeout 10m ./...
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          # Intentar compilar con -race usando gcc del runner (CGO_ENABLED=1).
+          # Si el runner de Windows no soporta -race para Go 1.27 (por ejemplo,
+          # falta gcc o incompatibilidad del toolchain race), caer explícitamente a
+          # go test sin -race sin ocultar fallos reales de pruebas.
+          $probe = Join-Path $env:TEMP "weaver-race-probe.test.exe"
+          $raceSupported = $false
+          if (Get-Command gcc -ErrorAction SilentlyContinue) {
+            go test -race -c -o $probe ./cmd/weaver
+            if ($LASTEXITCODE -eq 0) {
+              $raceSupported = $true
+            }
+            Remove-Item -Force $probe -ErrorAction SilentlyContinue
+          }
+          if ($raceSupported) {
+            go test -race -shuffle=on -count=1 -timeout 10m ./...
+          } else {
+            Write-Warning "El runner Windows no soporta -race para este toolchain Go/CGO; ejecutando tests sin -race."
+            $env:CGO_ENABLED = "0"
+            go test -shuffle=on -count=1 -timeout 10m ./...
+          }
+          exit $LASTEXITCODE
+
+  cross-build:
+    name: Cross-build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release binaries
+        run: |
+          mkdir -p dist
+          LDFLAGS="-s -w -X main.version=ci -X main.commit=${{ github.sha }}"
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o dist/weaver-linux-amd64 ./cmd/weaver
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o dist/weaver-windows-amd64.exe ./cmd/weaver
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o dist/weaver-darwin-arm64 ./cmd/weaver
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
