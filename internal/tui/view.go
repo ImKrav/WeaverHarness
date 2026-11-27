@@ -33,7 +33,7 @@ func (m Model) View() string {
 		PaddingLeft(1).
 		BorderLeft(true).
 		BorderStyle(lipgloss.NormalBorder()).
-		Render(m.renderSidePanel(panelW - 2))
+		Render(m.renderSidePanel(panelW-2, bodyH))
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, chatPane, panelPane)
 
@@ -41,6 +41,8 @@ func (m Model) View() string {
 	switch {
 	case m.confirmQuit:
 		banner = styleWarn.Render("¿Parar todo? [s/N]")
+	case m.confirmCancel != "":
+		banner = styleWarn.Render(fmt.Sprintf("¿Cancelar %s? [s/N]", m.confirmCancel))
 	case m.pendingApproval != nil && m.rejecting:
 		banner = stylePrompt.Render(fmt.Sprintf("⚑ Rechazar %s — escribe comentario y pulsa Enter (Esc cancela)", m.pendingApproval.Req.Kind))
 	case m.pendingApproval != nil && strings.TrimSpace(m.input.Value()) != "":
@@ -63,10 +65,14 @@ func (m Model) View() string {
 func (m Model) renderHelpFooter(totalW int) string {
 	var help string
 	switch {
+	case m.confirmCancel != "":
+		help = "[s] confirmar cancelación · [n/Esc] volver"
 	case m.pendingApproval != nil && m.rejecting:
 		help = "Enter enviar rechazo · Esc cancelar"
 	case m.pendingApproval != nil:
 		help = "[a] aprobar  [r] rechazar  [v] ver detalle  ·  Ctrl+C salir"
+	case m.panelFocused:
+		help = "↑/↓ elegir · Enter detalle · x cancelar · Esc chat"
 	default:
 		help = "Tab panel · Ctrl+J nueva línea · Shift+arrastrar copiar · Ctrl+C salir"
 	}
@@ -112,7 +118,7 @@ func (m Model) renderHeader(totalW int) string {
 	return styleHeader.Render(text)
 }
 
-func (m Model) renderSidePanel(width int) string {
+func (m Model) renderSidePanel(width, bodyH int) string {
 	var b strings.Builder
 
 	if len(m.progress.Tasks) > 0 {
@@ -140,7 +146,20 @@ func (m Model) renderSidePanel(width int) string {
 		return b.String()
 	}
 
-	for i, ag := range m.agents {
+	avail := panelAgentAvailLines(bodyH, len(m.progress.Tasks))
+	start, end, hasUp, hasDown := agentWindowRange(len(m.agents), m.panelOffset, avail)
+
+	if hasUp {
+		upLine := fmt.Sprintf("  ▲ +%d más", start)
+		if width > 4 && ansi.StringWidth(upLine) > width {
+			upLine = ansi.Truncate(upLine, width, "…")
+		}
+		b.WriteString(styleDim.Render(upLine))
+		b.WriteByte('\n')
+	}
+
+	for i := start; i < end; i++ {
+		ag := m.agents[i]
 		prefix := "  "
 		if m.panelFocused && i == m.selected {
 			prefix = "▸ "
@@ -161,6 +180,15 @@ func (m Model) renderSidePanel(width int) string {
 		b.WriteString(styleDim.Render(line2))
 		b.WriteByte('\n')
 	}
+
+	if hasDown {
+		downLine := fmt.Sprintf("  ▼ +%d más", len(m.agents)-end)
+		if width > 4 && ansi.StringWidth(downLine) > width {
+			downLine = ansi.Truncate(downLine, width, "…")
+		}
+		b.WriteString(styleDim.Render(downLine))
+	}
+
 	return b.String()
 }
 

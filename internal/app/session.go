@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ImKrav/weaverharness/internal/config"
 	"github.com/ImKrav/weaverharness/internal/engine"
@@ -44,6 +46,22 @@ type SessionOptions struct {
 	In       io.Reader
 	Out      io.Writer
 	Headless func(send func(string) error, events <-chan provider.Event) error
+}
+
+type chatEntry struct {
+	At   time.Time `json:"at"`
+	Role string    `json:"role"` // "user" | "orchestrator" | "tool" | "system" | "error"
+	Text string    `json:"text"`
+}
+
+type tuiSessionParams struct {
+	repoDir  string
+	store    run.Store
+	runDir   string
+	orchRole config.Role
+	eng      *engine.Engine
+	orchRun  provider.Run
+	resume   bool
 }
 
 type tuiBridge struct {
@@ -247,33 +265,15 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 		return runHeadless(ctx, eng, orchRun, o.Headless)
 	}
 
-	title := fmt.Sprintf("WeaverHarness · orquestador %s/%s", orchRole.Provider, orchRole.Model)
-	detailFn := func(agentID string) tui.AgentDetail {
-		cur := eng.State()
-		if cur == nil {
-			return tui.AgentDetail{ID: agentID}
-		}
-		agDir := store.AgentDir(cur.RunID, agentID)
-		return tui.AgentDetail{
-			ID:           agentID,
-			Receipt:      readTextFile(filepath.Join(agDir, "receipt.json")),
-			Verification: readTextFile(filepath.Join(agDir, "verification.json")),
-			LogTail:      readTailLines(filepath.Join(agDir, "transcript.jsonl"), 80),
-		}
-	}
-	previewFn := func(r engine.ApprovalRequest) (string, error) {
-		return buildApprovalPreview(repo.Dir, eng.State(), r)
-	}
-
-	model := tui.NewWithOptions(tui.Options{
-		Title:            title,
-		OrchestratorName: orchRole.Model,
-		Send:             orchRun.Send,
-		Detail:           detailFn,
-		Preview:          previewFn,
-		InitialAgents:    eng.Status(""),
-		InitialProgress:  eng.Progress(),
-	})
+	model := tui.NewWithOptions(buildTUIOptions(tuiSessionParams{
+		repoDir:  repo.Dir,
+		store:    store,
+		runDir:   runDir,
+		orchRole: orchRole,
+		eng:      eng,
+		orchRun:  orchRun,
+		resume:   o.Resume,
+	}))
 	progOpts := []tea.ProgramOption{tea.WithAltScreen()}
 	if !o.NoMouse {
 		progOpts = append(progOpts, tea.WithMouseCellMotion())
@@ -298,6 +298,148 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 	_ = orchRun.Kill()
 	<-fwdDone
 	return runErr
+}
+
+func buildTUIOptions(p tuiSessionParams) tui.Options {
+	title := fmt.Sprintf("WeaverHarness · orquestador %s/%s", p.orchRole.Provider, p.orchRole.Model)
+	chatPath := ""
+	if p.runDir != "" {
+		chatPath = filepath.Join(p.runDir, "chat.jsonl")
+	}
+
+	var sendFn func(string) error
+	if p.orchRun != nil {
+		sendFn = p.orchRun.Send
+	}
+
+	var detailFn func(string) tui.AgentDetail
+	var previewFn func(engine.ApprovalRequest) (string, error)
+	var cancelFn func(string) error
+	var initialAgents []engine.AgentInfo
+	var initialProgress engine.RunProgress
+
+	if p.eng != nil {
+		detailFn = func(agentID string) tui.AgentDetail {
+			cur := p.eng.State()
+			if cur == nil {
+				return tui.AgentDetail{ID: agentID}
+			}
+			agDir := p.store.AgentDir(cur.RunID, agentID)
+			return tui.AgentDetail{
+				ID:           agentID,
+				Receipt:      readTextFile(filepath.Join(agDir, "receipt.json")),
+				Verification: readTextFile(filepath.Join(agDir, "verification.json")),
+				LogTail:      readTailLines(filepath.Join(agDir, "transcript.jsonl"), 80),
+			}
+		}
+		previewFn = func(r engine.ApprovalRequest) (string, error) {
+			return buildApprovalPreview(p.repoDir, p.eng.State(), r)
+		}
+		cancelFn = p.eng.Cancel
+		initialAgents = p.eng.Status("")
+		initialProgress = p.eng.Progress()
+	}
+
+	var initialChat []string
+	if p.resume && chatPath != "" {
+		initialChat = formatChatEntries(loadChatEntries(chatPath, 100), p.orchRole.Model)
+	}
+
+	var onChatEntry func(role, text string)
+	if chatPath != "" {
+		onChatEntry = func(role, text string) {
+			appendChatEntry(chatPath, chatEntry{
+				At:   time.Now().UTC(),
+				Role: role,
+				Text: text,
+			})
+		}
+	}
+
+	return tui.Options{
+		Title:            title,
+		OrchestratorName: p.orchRole.Model,
+		Send:             sendFn,
+		Detail:           detailFn,
+		Preview:          previewFn,
+		CancelAgent:      cancelFn,
+		OnChatEntry:      onChatEntry,
+		InitialAgents:    initialAgents,
+		InitialProgress:  initialProgress,
+		InitialChat:      initialChat,
+	}
+}
+
+func appendChatEntry(path string, e chatEntry) {
+	if strings.TrimSpace(path) == "" || e.Text == "" {
+		return
+	}
+	if e.At.IsZero() {
+		e.At = time.Now().UTC()
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
+}
+
+func loadChatEntries(path string, maxEntries int) []chatEntry {
+	if maxEntries <= 0 || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	entries := make([]chatEntry, 0, min(len(lines), maxEntries))
+	for _, raw := range lines {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		var e chatEntry
+		if err := json.Unmarshal([]byte(raw), &e); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	if len(entries) > maxEntries {
+		entries = entries[len(entries)-maxEntries:]
+	}
+	return entries
+}
+
+func formatChatEntries(entries []chatEntry, orchName string) []string {
+	label := strings.TrimSpace(orchName)
+	if label == "" {
+		label = "orquestador"
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		switch e.Role {
+		case "user":
+			out = append(out, "tú › "+e.Text)
+		case "orchestrator":
+			out = append(out, label+" › "+e.Text)
+		case "tool":
+			out = append(out, "· "+e.Text)
+		case "error":
+			out = append(out, "✗ "+e.Text)
+		default:
+			out = append(out, e.Text)
+		}
+	}
+	return out
 }
 
 func buildApprovalPreview(repoDir string, st *run.State, req engine.ApprovalRequest) (string, error) {

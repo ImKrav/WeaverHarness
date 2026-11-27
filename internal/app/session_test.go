@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ImKrav/weaverharness/internal/config"
 	"github.com/ImKrav/weaverharness/internal/engine"
 	"github.com/ImKrav/weaverharness/internal/gitx"
 	"github.com/ImKrav/weaverharness/internal/provider"
@@ -291,5 +293,72 @@ func TestPreviewRejectsPathTraversal(t *testing.T) {
 	})
 	if err != nil || !strings.Contains(okOut, "REQ-1") {
 		t.Fatalf("valid spec preview = (%q, %v), want REQ-1", okOut, err)
+	}
+}
+
+func TestResumeLoadsPreviousChatHistory(t *testing.T) {
+	r := newAppTestRepo(t)
+	runID := "20261127-120000"
+	store := run.Store{Root: filepath.Join(r.Dir, ".weaver", "runs")}
+	runDir := filepath.Join(store.Root, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	chatPath := filepath.Join(runDir, "chat.jsonl")
+	for i := 1; i <= 120; i++ {
+		role := "user"
+		if i%2 == 0 {
+			role = "orchestrator"
+		}
+		appendChatEntry(chatPath, chatEntry{
+			At:   time.Now().UTC(),
+			Role: role,
+			Text: fmt.Sprintf("entrada-%03d", i),
+		})
+	}
+
+	entries := loadChatEntries(chatPath, 100)
+	if len(entries) != 100 {
+		t.Fatalf("len(loadChatEntries) = %d, want 100", len(entries))
+	}
+	if entries[0].Text != "entrada-021" || entries[99].Text != "entrada-120" {
+		t.Fatalf("loaded entries range = [%q..%q], want [entrada-021..entrada-120]", entries[0].Text, entries[99].Text)
+	}
+
+	raw, err := os.ReadFile(chatPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "\x1b[") {
+		t.Fatalf("chat.jsonl contains ANSI escape sequences")
+	}
+
+	opts := buildTUIOptions(tuiSessionParams{
+		repoDir:  r.Dir,
+		store:    store,
+		runDir:   runDir,
+		orchRole: config.Role{Provider: "claude", Model: "opus"},
+		resume:   true,
+	})
+	if len(opts.InitialChat) != 100 {
+		t.Fatalf("InitialChat len = %d, want 100", len(opts.InitialChat))
+	}
+	if !strings.Contains(opts.InitialChat[0], "entrada-021") || !strings.Contains(opts.InitialChat[99], "entrada-120") {
+		t.Fatalf("InitialChat bounds = [%q..%q]", opts.InitialChat[0], opts.InitialChat[99])
+	}
+	if opts.OnChatEntry == nil {
+		t.Fatal("OnChatEntry callback was nil")
+	}
+
+	optsNoResume := buildTUIOptions(tuiSessionParams{
+		repoDir:  r.Dir,
+		store:    store,
+		runDir:   runDir,
+		orchRole: config.Role{Provider: "claude", Model: "opus"},
+		resume:   false,
+	})
+	if len(optsNoResume.InitialChat) != 0 {
+		t.Fatalf("InitialChat len with resume=false = %d, want 0", len(optsNoResume.InitialChat))
 	}
 }

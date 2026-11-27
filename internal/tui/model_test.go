@@ -794,3 +794,150 @@ func TestModalLiveRefreshWhileRunning(t *testing.T) {
 		t.Fatal("modalTickMsg continued scheduling after agent finished")
 	}
 }
+
+func TestAgentsPanelScrollKeepsSelectionVisible(t *testing.T) {
+	agents := make([]engine.AgentInfo, 20)
+	for i := range agents {
+		agents[i] = engine.AgentInfo{
+			ID:       fmt.Sprintf("ag-%02d", i+1),
+			TaskID:   fmt.Sprintf("T%02d", i+1),
+			Provider: "codex",
+			Model:    "m",
+			Status:   "running",
+		}
+	}
+
+	m := NewWithOptions(Options{
+		Title:         "WeaverHarness",
+		InitialAgents: agents,
+	})
+	// Height 20 => bodyH = max(6, 20-8) = 12.
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	m = next.(Model)
+
+	if _, _, _, bodyH := m.layout(); bodyH != 12 {
+		t.Fatalf("bodyH = %d, want 12", bodyH)
+	}
+
+	// Move down 14 times -> selected index 14 (ag-15).
+	for i := 0; i < 14; i++ {
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = next.(Model)
+	}
+	if m.selected != 14 {
+		t.Fatalf("selected = %d, want 14", m.selected)
+	}
+	if m.panelOffset == 0 {
+		t.Fatalf("panelOffset = 0, want > 0 after scrolling to agent 15")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "ag-15") {
+		t.Fatalf("View() missing selected scrolled agent ag-15:\n%s", view)
+	}
+	if !strings.Contains(view, "▲") || !strings.Contains(view, "▼") {
+		t.Fatalf("View() missing scroll indicators ▲/▼:\n%s", view)
+	}
+}
+
+func TestCancelAgentFromPanelAsync(t *testing.T) {
+	var cancelledID string
+	m := NewWithOptions(Options{
+		Title: "WeaverHarness",
+		CancelAgent: func(agentID string) error {
+			cancelledID = agentID
+			return nil
+		},
+		InitialAgents: []engine.AgentInfo{
+			{ID: "a1", TaskID: "T1", Provider: "codex", Model: "m", Status: "running"},
+		},
+	})
+
+	// Focus panel on a1.
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+
+	// Press x -> prompts confirmation.
+	next, cmd := m.Update(keyRunes("x"))
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("x should prompt confirmation before calling CancelAgent")
+	}
+	if !strings.Contains(m.View(), "¿Cancelar a1? [s/N]") {
+		t.Fatalf("View() missing cancel confirmation prompt:\n%s", m.View())
+	}
+
+	// Press n -> cancels confirmation.
+	next, cmd = m.Update(keyRunes("n"))
+	m = next.(Model)
+	if cmd != nil || cancelledID != "" {
+		t.Fatal("n should cancel confirmation without calling CancelAgent")
+	}
+	if strings.Contains(m.View(), "¿Cancelar a1? [s/N]") {
+		t.Fatalf("confirmation prompt remained after n:\n%s", m.View())
+	}
+
+	// Press x then s -> returns async cmd calling Options.CancelAgent("a1").
+	next, _ = m.Update(keyRunes("x"))
+	m = next.(Model)
+	next, cmd = m.Update(keyRunes("s"))
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("pressing s after cancel prompt returned nil cmd, want async CancelAgent cmd")
+	}
+	if cancelledID != "" {
+		t.Fatal("CancelAgent called synchronously before cmd() ran")
+	}
+
+	msg := cmd()
+	if cancelledID != "a1" {
+		t.Fatalf("CancelAgent called with %q, want a1", cancelledID)
+	}
+	next, _ = m.Update(msg)
+	m = next.(Model)
+	if !strings.Contains(m.View(), "cancelado") {
+		t.Fatalf("View() missing cancellation confirmation in chat:\n%s", m.View())
+	}
+
+	// Error case from agentCancelledMsg also reflects in chat.
+	next, _ = m.Update(agentCancelledMsg{agentID: "a1", err: errors.New("boom")})
+	m = next.(Model)
+	if !strings.Contains(m.View(), "error al cancelar a1: boom") {
+		t.Fatalf("View() missing cancellation error in chat:\n%s", m.View())
+	}
+}
+
+func TestMultilineInputCtrlJAndAltEnter(t *testing.T) {
+	var sent []string
+	m := New("WeaverHarness", func(s string) error {
+		sent = append(sent, s)
+		return nil
+	}, nil)
+
+	m = typeText(m, "linea uno")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = next.(Model)
+	if cmd != nil || len(sent) != 0 {
+		t.Fatalf("Ctrl+J sent message prematurely: sent=%v", sent)
+	}
+
+	m = typeText(m, "linea dos")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = next.(Model)
+	if cmd != nil || len(sent) != 0 {
+		t.Fatalf("Alt+Enter sent message prematurely: sent=%v", sent)
+	}
+
+	m = typeText(m, "linea tres")
+	wantVal := "linea uno\nlinea dos\nlinea tres"
+	if got := m.input.Value(); got != wantVal {
+		t.Fatalf("input.Value() = %q, want %q", got, wantVal)
+	}
+
+	// Plain Enter sends full multiline text.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = next.(Model)
+	if len(sent) != 1 || sent[0] != wantVal {
+		t.Fatalf("sent = %q, want [%q]", sent, wantVal)
+	}
+}

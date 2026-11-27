@@ -67,6 +67,11 @@ type modalLoadedMsg struct {
 
 type modalTickMsg struct{ agentID string }
 
+type agentCancelledMsg struct {
+	agentID string
+	err     error
+}
+
 // Options configures a TUI Model instance.
 type Options struct {
 	Title            string
@@ -101,11 +106,13 @@ type Model struct {
 	chatLines   []string
 	unreadBelow int
 
-	progress     engine.RunProgress
-	agents       []engine.AgentInfo
-	selected     int
-	panelFocused bool
-	modal        *modalState
+	progress      engine.RunProgress
+	agents        []engine.AgentInfo
+	selected      int
+	panelOffset   int
+	panelFocused  bool
+	confirmCancel string
+	modal         *modalState
 
 	pendingApproval *ApprovalAsked
 	rejecting       bool
@@ -198,7 +205,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modalLoadedMsg:
 		if msg.err != nil {
-			m.appendChat(styleError.Render("✗ error al cargar detalle: " + msg.err.Error()))
+			errText := "error al cargar detalle: " + msg.err.Error()
+			m.appendChat(styleError.Render("✗ " + errText))
+			m.recordChat("error", errText)
 			return m, nil
 		}
 		_, innerW, vpH := m.modalDims()
@@ -238,6 +247,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, loadAgentDetailCmd(m.detailFn, msg.agentID)
 
+	case agentCancelledMsg:
+		if msg.err != nil {
+			errText := fmt.Sprintf("error al cancelar %s: %v", msg.agentID, msg.err)
+			m.appendChat(styleError.Render("✗ " + errText))
+			m.recordChat("error", errText)
+		} else {
+			text := fmt.Sprintf("Agente %s cancelado.", msg.agentID)
+			m.appendChat(styleWarn.Render("✕ " + text))
+			m.recordChat("system", text)
+		}
+		return m, nil
+
 	case OrchestratorEvent:
 		m.handleOrchestratorEvent(msg.Event)
 		if msg.Event.Kind == provider.EventTurnEnd {
@@ -248,9 +269,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OrchestratorExited:
 		m.thinking = false
 		if msg.Err != nil {
-			m.appendChat(styleError.Render(fmt.Sprintf("✗ Orquestador terminó (%v). Usa 'weaver resume' para retomar.", msg.Err)))
+			text := fmt.Sprintf("Orquestador terminó (%v). Usa 'weaver resume' para retomar.", msg.Err)
+			m.appendChat(styleError.Render("✗ " + text))
+			m.recordChat("error", text)
 		} else {
-			m.appendChat(styleWarn.Render("Orquestador terminó. Usa 'weaver resume' para retomar."))
+			text := "Orquestador terminó. Usa 'weaver resume' para retomar."
+			m.appendChat(styleWarn.Render(text))
+			m.recordChat("system", text)
 		}
 		return m, nil
 
@@ -259,10 +284,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selected >= len(m.agents) {
 			m.selected = max(0, len(m.agents)-1)
 		}
+		m.adjustPanelOffset()
 		return m, nil
 
 	case ProgressChanged:
 		m.progress = msg.Progress
+		m.adjustPanelOffset()
 		return m, nil
 
 	case RefViolations:
@@ -272,6 +299,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				note += " (restaurada)"
 			}
 			m.appendChat(styleWarn.Render(note))
+			m.recordChat("system", note)
 		}
 		return m, nil
 
@@ -279,9 +307,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cp := msg
 		m.pendingApproval = &cp
 		m.rejecting = false
-		m.appendChat(stylePrompt.Render(fmt.Sprintf("⚑ Aprobación solicitada: %s (%s)", msg.Req.Kind, msg.Req.Path)))
+		promptLine := fmt.Sprintf("Aprobación solicitada: %s (%s)", msg.Req.Kind, msg.Req.Path)
+		m.appendChat(stylePrompt.Render("⚑ " + promptLine))
+		m.recordChat("system", promptLine)
 		if msg.Req.Summary != "" {
-			m.appendChat("  " + msg.Req.Summary)
+			summaryLine := "  " + msg.Req.Summary
+			m.appendChat(summaryLine)
+			m.recordChat("system", summaryLine)
 		}
 		if msg.Req.Kind == "plan" && msg.Req.Plan != nil {
 			for _, t := range msg.Req.Plan.Tasks {
@@ -293,9 +325,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					line += fmt.Sprintf(" | checks: %s", strings.Join(t.Checks, "; "))
 				}
 				m.appendChat(line)
+				m.recordChat("system", line)
 			}
 			if len(msg.Req.Plan.GlobalChecks) > 0 {
-				m.appendChat("  · global_checks: " + strings.Join(msg.Req.Plan.GlobalChecks, "; "))
+				gcLine := "  · global_checks: " + strings.Join(msg.Req.Plan.GlobalChecks, "; ")
+				m.appendChat(gcLine)
+				m.recordChat("system", gcLine)
 			}
 		}
 		return m, nil
@@ -305,6 +340,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingApproval = nil
 			m.rejecting = false
 			m.appendChat(styleDim.Render("⚑ Aprobación cancelada."))
+			m.recordChat("system", "Aprobación cancelada.")
 		}
 		return m, nil
 
@@ -334,6 +370,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.confirmCancel != "" {
+		switch strings.ToLower(msg.String()) {
+		case "s", "y":
+			id := m.confirmCancel
+			m.confirmCancel = ""
+			if m.cancelFn == nil {
+				m.appendChat(styleDim.Render("Cancelación no disponible."))
+				return m, nil
+			}
+			return m, cancelAgentCmd(m.cancelFn, id)
+		case "n", "esc", "enter":
+			m.confirmCancel = ""
+			return m, nil
+		}
+		return m, nil
+	}
+
 	if m.modal != nil {
 		switch {
 		case msg.Type == tea.KeyEsc, strings.ToLower(msg.String()) == "q":
@@ -355,12 +408,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if msg.Type == tea.KeyCtrlJ || (msg.Alt && msg.Type == tea.KeyEnter) {
+		m.panelFocused = false
+		m.input.InsertRune('\n')
+		return m, nil
+	}
+
 	if m.pendingApproval != nil && !m.rejecting && strings.TrimSpace(m.input.Value()) == "" {
 		switch strings.ToLower(msg.String()) {
 		case "a":
 			ans := ApprovalAnswer{Approved: true}
 			m.pendingApproval.Reply <- ans
-			m.appendChat(styleOK.Render(fmt.Sprintf("✓ Aprobado: %s", m.pendingApproval.Req.Kind)))
+			text := fmt.Sprintf("Aprobado: %s", m.pendingApproval.Req.Kind)
+			m.appendChat(styleOK.Render("✓ " + text))
+			m.recordChat("system", text)
 			m.pendingApproval = nil
 			return m, nil
 		case "r":
@@ -379,6 +440,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.panelFocused && !m.rejecting && len(m.agents) > 0 && strings.ToLower(msg.String()) == "x" {
+		ag := m.agents[m.selected]
+		if ag.Status == "queued" || ag.Status == "running" {
+			m.confirmCancel = ag.ID
+			return m, nil
+		}
+		m.appendChat(styleDim.Render(fmt.Sprintf("El agente %s ya no está activo (%s).", ag.ID, ag.Status)))
+		return m, nil
+	}
+
 	switch msg.Type {
 	case tea.KeyEsc:
 		if m.rejecting {
@@ -393,6 +464,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyTab:
 		if !m.rejecting && len(m.agents) > 0 {
 			m.panelFocused = !m.panelFocused
+			m.adjustPanelOffset()
 		}
 		return m, nil
 
@@ -401,6 +473,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.panelFocused = true
 			if m.selected > 0 {
 				m.selected--
+				m.adjustPanelOffset()
 			}
 			return m, nil
 		}
@@ -410,6 +483,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.panelFocused = true
 			if m.selected < len(m.agents)-1 {
 				m.selected++
+				m.adjustPanelOffset()
 			}
 			return m, nil
 		}
@@ -438,7 +512,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.rejecting && m.pendingApproval != nil {
 			comment := strings.TrimSpace(m.input.Value())
 			m.pendingApproval.Reply <- ApprovalAnswer{Approved: false, Comment: comment}
-			m.appendChat(styleError.Render(fmt.Sprintf("✗ Rechazado: %s (%s)", m.pendingApproval.Req.Kind, comment)))
+			text := fmt.Sprintf("Rechazado: %s (%s)", m.pendingApproval.Req.Kind, comment)
+			m.appendChat(styleError.Render("✗ " + text))
+			m.recordChat("system", text)
 			m.pendingApproval = nil
 			m.rejecting = false
 			m.input.Reset()
@@ -456,11 +532,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.panelFocused = false
 		m.appendChat("tú › " + text)
+		m.recordChat("user", text)
 		m.viewport.GotoBottom()
 		m.unreadBelow = 0
 		if m.sendFn != nil {
 			if err := m.sendFn(text); err != nil {
-				m.appendChat(styleError.Render("✗ error al enviar: " + err.Error()))
+				errText := "error al enviar: " + err.Error()
+				m.appendChat(styleError.Render("✗ " + errText))
+				m.recordChat("error", errText)
 				return m, nil
 			}
 		}
@@ -473,6 +552,74 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+func (m *Model) adjustPanelOffset() {
+	total := len(m.agents)
+	if total == 0 {
+		m.selected = 0
+		m.panelOffset = 0
+		return
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	if m.selected >= total {
+		m.selected = total - 1
+	}
+
+	_, _, _, bodyH := m.layout()
+	avail := panelAgentAvailLines(bodyH, len(m.progress.Tasks))
+	if total*2 <= avail {
+		m.panelOffset = 0
+		return
+	}
+
+	m.panelOffset = max(0, min(m.panelOffset, total-1))
+	if m.selected < m.panelOffset {
+		m.panelOffset = m.selected
+		return
+	}
+	for {
+		_, end, _, _ := agentWindowRange(total, m.panelOffset, avail)
+		if m.selected < end || m.panelOffset >= m.selected {
+			break
+		}
+		m.panelOffset++
+	}
+}
+
+func panelAgentAvailLines(bodyH, numTasks int) int {
+	used := 1 // "Agentes" header
+	if numTasks > 0 {
+		used += 2 + numTasks // "Tareas" + tasks + blank line
+	}
+	return max(3, bodyH-used)
+}
+
+func agentWindowRange(total, offset, avail int) (start, end int, hasUp, hasDown bool) {
+	if total <= 0 {
+		return 0, 0, false, false
+	}
+	if total*2 <= avail {
+		return 0, total, false, false
+	}
+	offset = max(0, min(offset, total-1))
+	hasUp = offset > 0
+	rem := avail
+	if hasUp {
+		rem--
+	}
+	if (total-offset)*2 <= rem {
+		return offset, total, hasUp, false
+	}
+	rem-- // reserve 1 line for bottom scroll indicator
+	count := max(1, rem/2)
+	end = offset + count
+	if end >= total {
+		return offset, total, hasUp, false
+	}
+	return offset, end, hasUp, true
 }
 
 func (m Model) isAgentActive(agentID string) bool {
@@ -507,6 +654,12 @@ func loadPreviewCmd(fn func(engine.ApprovalRequest) (string, error), req engine.
 			content: content,
 			err:     err,
 		}
+	}
+}
+
+func cancelAgentCmd(fn func(string) error, agentID string) tea.Cmd {
+	return func() tea.Msg {
+		return agentCancelledMsg{agentID: agentID, err: fn(agentID)}
 	}
 }
 
@@ -547,15 +700,24 @@ func (m *Model) handleOrchestratorEvent(ev provider.Event) {
 	case provider.EventText:
 		if ev.Text != "" {
 			m.appendChat(m.orchLabel + " › " + ev.Text)
+			m.recordChat("orchestrator", ev.Text)
 		}
 	case provider.EventTool:
 		if ev.Tool != "" {
 			m.appendChat(styleDim.Render("· " + ev.Tool))
+			m.recordChat("tool", ev.Tool)
 		}
 	case provider.EventError:
 		if ev.Text != "" {
 			m.appendChat(styleError.Render("✗ " + ev.Text))
+			m.recordChat("error", ev.Text)
 		}
+	}
+}
+
+func (m *Model) recordChat(role, text string) {
+	if m.onChatEntryFn != nil && text != "" {
+		m.onChatEntryFn(role, text)
 	}
 }
 
@@ -622,6 +784,8 @@ func (m *Model) resize() {
 		m.viewport.GotoBottom()
 		m.unreadBelow = 0
 	}
+
+	m.adjustPanelOffset()
 
 	if m.modal != nil {
 		_, innerW, vpH := m.modalDims()
