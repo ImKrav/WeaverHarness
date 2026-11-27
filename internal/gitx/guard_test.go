@@ -167,3 +167,65 @@ func TestGuardReportsCreatedAndRemote(t *testing.T) {
 		t.Fatalf("branch foo should not be deleted: %v", err)
 	}
 }
+
+func TestGuardCheckExceptProtectsOtherWeaverBranches(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+
+	headSHA, err := r.RevParse(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(ctx, "branch", "weaver/run1", headSHA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(ctx, "branch", "weaver/run1-a1", headSHA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(ctx, "branch", "weaver/run1-a2", headSHA); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := NewGuard(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	treeSHA, err := r.Run(ctx, "rev-parse", "HEAD^{tree}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	altSHA, err := r.Run(ctx, "commit-tree", treeSHA, "-p", headSHA, "-m", "alt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutate weaver/run1, weaver/run1-a1, and allowed weaver/run1-a2.
+	if _, err := r.Run(ctx, "update-ref", "refs/heads/weaver/run1", altSHA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(ctx, "update-ref", "refs/heads/weaver/run1-a1", altSHA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(ctx, "update-ref", "refs/heads/weaver/run1-a2", altSHA); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := g.CheckExcept(ctx, "refs/heads/weaver/run1-a2")
+	if err != nil {
+		t.Fatalf("CheckExcept() error: %v", err)
+	}
+	if len(violations) != 2 {
+		t.Fatalf("len(violations) = %d, want 2 (run1 and run1-a1): %+v", len(violations), violations)
+	}
+
+	gotRun1, _ := r.RevParse(ctx, "refs/heads/weaver/run1")
+	gotA1, _ := r.RevParse(ctx, "refs/heads/weaver/run1-a1")
+	gotA2, _ := r.RevParse(ctx, "refs/heads/weaver/run1-a2")
+	if gotRun1 != headSHA || gotA1 != headSHA {
+		t.Fatalf("protected weaver branches not restored: run1=%s a1=%s want=%s", gotRun1, gotA1, headSHA)
+	}
+	if gotA2 != altSHA {
+		t.Fatalf("allowed weaver/run1-a2 = %s, want %s", gotA2, altSHA)
+	}
+}

@@ -9,6 +9,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const maxWaitTimeout = 45 * time.Second
+
+func clampWaitTimeout(seconds float64) time.Duration {
+	if seconds <= 0 {
+		return maxWaitTimeout
+	}
+	d := time.Duration(seconds * float64(time.Second))
+	if d <= 0 || d > maxWaitTimeout {
+		return maxWaitTimeout
+	}
+	return d
+}
+
 type planTaskInput struct {
 	ID        string   `json:"id" jsonschema:"identificador único de tarea (ej. T1)"`
 	Title     string   `json:"title" jsonschema:"título breve de la tarea"`
@@ -45,7 +58,7 @@ type spawnAgentOut struct {
 
 type waitAgentsIn struct {
 	AgentIDs []string `json:"agent_ids" jsonschema:"lista de agent_id a esperar"`
-	TimeoutS float64  `json:"timeout_s" jsonschema:"tiempo máximo de espera en segundos"`
+	TimeoutS float64  `json:"timeout_s" jsonschema:"tiempo máximo de espera en segundos (máximo 45s)"`
 }
 
 type waitAgentsOut struct {
@@ -157,10 +170,7 @@ func registerTools(srv *mcp.Server, e *engine.Engine) {
 		Name:        "wait_agents",
 		Description: "Espera a que terminen los subagentes indicados y devuelve solo recibos, verificación y diff_stat",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in waitAgentsIn) (*mcp.CallToolResult, waitAgentsOut, error) {
-		timeout := 60 * time.Second
-		if in.TimeoutS > 0 {
-			timeout = time.Duration(in.TimeoutS * float64(time.Second))
-		}
+		timeout := clampWaitTimeout(in.TimeoutS)
 		results := e.Wait(ctx, in.AgentIDs, timeout)
 		return nil, waitAgentsOut{Results: results}, nil
 	})

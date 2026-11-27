@@ -138,6 +138,23 @@ func connectTestClient(t *testing.T, url, token string) *mcp.ClientSession {
 	return sess
 }
 
+func TestClampWaitTimeout(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want time.Duration
+	}{
+		{0, 45 * time.Second},
+		{-5, 45 * time.Second},
+		{10, 10 * time.Second},
+		{300, 45 * time.Second},
+	}
+	for _, tc := range cases {
+		if got := clampWaitTimeout(tc.in); got != tc.want {
+			t.Fatalf("clampWaitTimeout(%v) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestRejectsWithoutToken(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

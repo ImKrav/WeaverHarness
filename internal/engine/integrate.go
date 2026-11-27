@@ -77,6 +77,9 @@ func (e *Engine) checkIntegration(ctx context.Context) error {
 }
 
 func (e *Engine) afterIntegration(ctx context.Context) (string, error) {
+	e.guardMu.Lock()
+	defer e.guardMu.Unlock()
+
 	e.mu.Lock()
 	if e.state == nil {
 		e.mu.Unlock()

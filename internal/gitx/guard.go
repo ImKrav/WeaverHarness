@@ -25,7 +25,7 @@ type Violation struct {
 	Restored bool   `json:"restored"`
 }
 
-// Guard monitors non-weaver git refs and worktree HEADs across subagent runs.
+// Guard monitors git refs and worktree HEADs across subagent runs.
 type Guard struct {
 	repo Repo
 	base Snapshot
@@ -57,10 +57,19 @@ func (g *Guard) Rebase(ctx context.Context) error {
 	return nil
 }
 
-// Check compares current refs and worktree HEADs against the baseline, restores
-// protected local branches/tags, and advances the baseline snapshot.
+// Check compares current non-weaver refs and worktree HEADs against the baseline,
+// restores protected local branches/tags, and advances the baseline snapshot.
 func (g *Guard) Check(ctx context.Context) ([]Violation, error) {
-	// shortcut: no detecta que un agente mueva otra rama weaver/ ni la de integración; atribuir por agente si hace falta
+	return g.check(ctx, true)
+}
+
+// CheckExcept compares all current refs (including refs/heads/weaver/*) and worktree HEADs
+// against the baseline, exempting only refs explicitly listed in allowedRefs.
+func (g *Guard) CheckExcept(ctx context.Context, allowedRefs ...string) ([]Violation, error) {
+	return g.check(ctx, false, allowedRefs...)
+}
+
+func (g *Guard) check(ctx context.Context, skipWeaver bool, allowedRefs ...string) ([]Violation, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -69,10 +78,23 @@ func (g *Guard) Check(ctx context.Context) ([]Violation, error) {
 		return nil, err
 	}
 
+	allowed := make(map[string]bool, len(allowedRefs))
+	for _, ref := range allowedRefs {
+		if ref != "" {
+			allowed[ref] = true
+		}
+	}
+	isIgnored := func(ref string) bool {
+		if skipWeaver && strings.HasPrefix(ref, WeaverRefPrefix) {
+			return true
+		}
+		return allowed[ref]
+	}
+
 	violations := []Violation{}
 
 	for ref, beforeSHA := range g.base.Refs {
-		if strings.HasPrefix(ref, WeaverRefPrefix) {
+		if isIgnored(ref) {
 			continue
 		}
 		afterSHA, exists := cur.Refs[ref]
@@ -118,7 +140,7 @@ func (g *Guard) Check(ctx context.Context) ([]Violation, error) {
 	}
 
 	for ref, afterSHA := range cur.Refs {
-		if strings.HasPrefix(ref, WeaverRefPrefix) {
+		if isIgnored(ref) {
 			continue
 		}
 		if _, existed := g.base.Refs[ref]; existed {

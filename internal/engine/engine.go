@@ -112,6 +112,8 @@ type Engine struct {
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 
+	// Lock ordering invariant: guardMu must always be acquired before mu.
+	guardMu     sync.Mutex
 	mu          sync.Mutex
 	state       *run.State
 	sems        map[string]chan struct{}
@@ -176,6 +178,8 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 
 // StartRun creates a new run and prepares or reuses the session integration worktree.
 func (e *Engine) StartRun(ctx context.Context) (*run.State, error) {
+	e.guardMu.Lock()
+	defer e.guardMu.Unlock()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -230,6 +234,9 @@ func (e *Engine) StartRun(ctx context.Context) (*run.State, error) {
 		return nil, err
 	}
 	e.state = st
+	if err := e.guard.Rebase(ctx); err != nil {
+		return nil, fmt.Errorf("engine: actualizando guardia de refs: %w", err)
+	}
 	return st, nil
 }
 
@@ -357,9 +364,51 @@ func (e *Engine) SetOrchestratorSessionID(sessionID string) error {
 	return e.store.Save(e.state)
 }
 
-// CheckRefs verifies non-weaver git refs via Guard and notifies on any violations.
+func (e *Engine) activeWeaverRefsLocked(extra ...string) []string {
+	refs := make([]string, 0, len(extra)+4)
+	for _, r := range extra {
+		if r != "" {
+			refs = append(refs, r)
+		}
+	}
+	if e.state != nil {
+		for _, ag := range e.state.Agents {
+			if (ag.Status == run.AgentQueued || ag.Status == run.AgentRunning) && ag.Branch != "" {
+				refs = append(refs, "refs/heads/"+ag.Branch)
+			}
+		}
+	}
+	return refs
+}
+
+func (e *Engine) checkRefsExcept(ctx context.Context, extra ...string) []gitx.Violation {
+	e.guardMu.Lock()
+	e.mu.Lock()
+	allowed := e.activeWeaverRefsLocked(extra...)
+	e.mu.Unlock()
+	violations, err := e.guard.CheckExcept(ctx, allowed...)
+	e.guardMu.Unlock()
+	if err != nil {
+		return nil
+	}
+	if len(violations) > 0 {
+		e.notify(violations)
+	}
+	return violations
+}
+
+// CheckRefs verifies git refs via Guard, allowing the active integration branch and active agents.
 func (e *Engine) CheckRefs(ctx context.Context) []gitx.Violation {
-	violations, err := e.guard.Check(ctx)
+	e.guardMu.Lock()
+	e.mu.Lock()
+	var extra []string
+	if e.state != nil && e.state.IntegrationBranch != "" {
+		extra = append(extra, "refs/heads/"+e.state.IntegrationBranch)
+	}
+	allowed := e.activeWeaverRefsLocked(extra...)
+	e.mu.Unlock()
+	violations, err := e.guard.CheckExcept(ctx, allowed...)
+	e.guardMu.Unlock()
 	if err != nil {
 		return nil
 	}

@@ -26,9 +26,11 @@ const (
 
 // Spawn creates a task worktree and launches a subagent asynchronously, respecting max_parallel.
 func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructions string) (string, error) {
+	e.guardMu.Lock()
 	e.mu.Lock()
 	if e.state == nil {
 		e.mu.Unlock()
+		e.guardMu.Unlock()
 		return "", errors.New("engine: no hay ejecución activa")
 	}
 
@@ -41,6 +43,7 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 	}
 	if err := e.state.CheckSpawn(taskID, mergedFn); err != nil {
 		e.mu.Unlock()
+		e.guardMu.Unlock()
 		return "", err
 	}
 
@@ -60,6 +63,7 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 	p, ok := e.providers[prov]
 	if !ok {
 		e.mu.Unlock()
+		e.guardMu.Unlock()
 		return "", fmt.Errorf("engine: proveedor %q no configurado", prov)
 	}
 
@@ -69,17 +73,20 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 	baseSHA, err := e.repo.RevParse(ctx, e.state.IntegrationBranch)
 	if err != nil {
 		e.mu.Unlock()
+		e.guardMu.Unlock()
 		return "", fmt.Errorf("engine: leyendo rama de integración %s: %w", e.state.IntegrationBranch, err)
 	}
 
 	if err := e.repo.AddWorktree(ctx, worktree, branch, baseSHA); err != nil {
 		e.mu.Unlock()
+		e.guardMu.Unlock()
 		return "", fmt.Errorf("engine: creando worktree de agente: %w", err)
 	}
 
 	agentDir := e.store.AgentDir(e.state.RunID, agentID)
 	if err := os.MkdirAll(agentDir, 0o755); err != nil {
 		e.mu.Unlock()
+		e.guardMu.Unlock()
 		return "", fmt.Errorf("engine: creando directorio de agente: %w", err)
 	}
 
@@ -103,6 +110,7 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 	workerPrompt, err := prompts.Worker(e.repo.Dir, wData)
 	if err != nil {
 		e.mu.Unlock()
+		e.guardMu.Unlock()
 		return "", fmt.Errorf("engine: renderizando prompt de worker: %w", err)
 	}
 
@@ -124,6 +132,7 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 	}
 	if err := e.store.Save(e.state); err != nil {
 		e.mu.Unlock()
+		e.guardMu.Unlock()
 		return "", err
 	}
 
@@ -135,6 +144,13 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 
 	infos := e.snapshotInfosLocked()
 	e.mu.Unlock()
+	if err := e.guard.Rebase(ctx); err != nil {
+		e.guardMu.Unlock()
+		cancel()
+		close(doneCh)
+		return "", fmt.Errorf("engine: actualizando guardia de refs tras spawn: %w", err)
+	}
+	e.guardMu.Unlock()
 
 	e.notify(infos)
 
@@ -358,8 +374,8 @@ func (e *Engine) runAgent(
 		}
 	}
 
-	// Step 3: check ref violations across the repo.
-	violations := e.CheckRefs(runCtx)
+	// Step 3: check ref violations across the repo, allowing this agent and other active agents.
+	violations := e.checkRefsExcept(runCtx, "refs/heads/"+branch)
 
 	// Step 4: verify receipt against commits, diff, and re-run checks.
 	ver := verify.Verification{
@@ -880,10 +896,15 @@ func (e *Engine) Cleanup(ctx context.Context, agentID string) error {
 	}
 	e.mu.Unlock()
 
+	e.guardMu.Lock()
+	defer e.guardMu.Unlock()
 	if err := e.repo.RemoveWorktree(ctx, worktree); err != nil {
 		return err
 	}
-	return e.repo.DeleteBranch(ctx, branch)
+	if err := e.repo.DeleteBranch(ctx, branch); err != nil {
+		return err
+	}
+	return e.guard.Rebase(ctx)
 }
 
 func (e *Engine) isAgentMerged(ctx context.Context, branch, mergedCommit, integBranch string) bool {

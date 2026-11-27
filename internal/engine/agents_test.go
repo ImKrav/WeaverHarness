@@ -730,3 +730,196 @@ func TestAgentDiffAfterCleanupUsesMergedCommit(t *testing.T) {
 		t.Fatalf("filtered AgentDiff() = %q, want only uno.txt", diff)
 	}
 }
+
+func TestAgentCannotMoveIntegrationBranch(t *testing.T) {
+	ctx := context.Background()
+	var integBranch string
+
+	prov := &fakeProvider{
+		name: "codex",
+		handler: func(call int, ctx context.Context, req provider.RunRequest) (provider.Run, error) {
+			wt, err := gitx.Open(req.Dir)
+			if err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(req.Dir, "rogue.txt"), []byte("r\n"), 0o644); err != nil {
+				return nil, err
+			}
+			if _, err := wt.CommitAll(ctx, "rogue commit"); err != nil {
+				return nil, err
+			}
+			sha, _ := wt.RevParse(ctx, "HEAD")
+			if _, err := wt.Run(ctx, "update-ref", "refs/heads/"+integBranch, sha); err != nil {
+				return nil, err
+			}
+			return newFakeRun("sid-int-rogue", []string{`{"ok":1}`}, provider.Final{
+				Text:      receiptBlock("T1", "done", "rogue.txt", []string{sha}, "echo ok"),
+				SessionID: "sid-int-rogue",
+			}), nil
+		},
+	}
+
+	eng, r, _ := setupPlanApprovedEngine(t, testConfig(), prov, nil)
+	integBranch = eng.State().IntegrationBranch
+	origInteg, err := r.RevParse(ctx, "refs/heads/"+integBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id, err := eng.Spawn(ctx, "T1", "", "", "", "mueve rama de integración")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := eng.Wait(ctx, []string{id}, 10*time.Second)
+
+	afterInteg, err := r.RevParse(ctx, "refs/heads/"+integBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterInteg != origInteg {
+		t.Fatalf("integration branch was not restored: got %s, want %s", afterInteg, origInteg)
+	}
+	if res[0].Verification == nil || res[0].Verification.Passed {
+		t.Fatalf("expected Verification.Passed == false, got %+v", res[0].Verification)
+	}
+	if len(res[0].Verification.RefViolations) == 0 {
+		t.Fatalf("expected non-empty RefViolations")
+	}
+}
+
+func TestParallelAgentsDoNotTriggerFalseRefViolations(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig()
+	pc := cfg.Providers["codex"]
+	pc.MaxParallel = 2
+	cfg.Providers["codex"] = pc
+
+	t2Committed := make(chan struct{})
+	releaseT2 := make(chan struct{})
+
+	prov := &fakeProvider{
+		name: "codex",
+		handler: func(call int, ctx context.Context, req provider.RunRequest) (provider.Run, error) {
+			taskID := "T1"
+			fileName := "f1.txt"
+			if strings.Contains(req.Prompt, "Segunda") {
+				taskID = "T2"
+				fileName = "f2.txt"
+			}
+			if err := os.WriteFile(filepath.Join(req.Dir, fileName), []byte(taskID+"\n"), 0o644); err != nil {
+				return nil, err
+			}
+			wt, err := gitx.Open(req.Dir)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := wt.CommitAll(ctx, "commit "+taskID); err != nil {
+				return nil, err
+			}
+			sha, err := wt.RevParse(ctx, "HEAD")
+			if err != nil {
+				return nil, err
+			}
+
+			if taskID == "T2" {
+				close(t2Committed)
+				ch := make(chan provider.Event)
+				done := make(chan struct{})
+				go func() {
+					<-releaseT2
+					close(ch)
+					close(done)
+				}()
+				return &fakeRun{
+					events:    ch,
+					done:      done,
+					sessionID: "sid-T2",
+					final: provider.Final{
+						Text:      receiptBlock("T2", "done", fileName, []string{sha}, "echo ok"),
+						SessionID: "sid-T2",
+					},
+				}, nil
+			}
+
+			// Wait until T2 has already committed on its branch so T1 checks refs while T2 is still running.
+			<-t2Committed
+			return newFakeRun("sid-T1", []string{`{"ok":1}`}, provider.Final{
+				Text:      receiptBlock("T1", "done", fileName, []string{sha}, "echo ok"),
+				SessionID: "sid-T1",
+			}), nil
+		},
+	}
+
+	eng, _, _ := setupPlanApprovedEngine(t, cfg, prov, nil)
+	id1, err := eng.Spawn(ctx, "T1", "", "", "", "haz T1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := eng.Spawn(ctx, "T2", "", "", "", "haz T2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res1 := eng.Wait(ctx, []string{id1}, 10*time.Second)
+	if len(res1) != 1 || res1[0].Verification == nil || !res1[0].Verification.Passed || len(res1[0].Verification.RefViolations) != 0 {
+		close(releaseT2)
+		t.Fatalf("T1 failed under parallel execution: %+v (ver=%+v)", res1[0], res1[0].Verification)
+	}
+
+	close(releaseT2)
+	res2 := eng.Wait(ctx, []string{id2}, 10*time.Second)
+	if len(res2) != 1 || res2[0].Verification == nil || !res2[0].Verification.Passed || len(res2[0].Verification.RefViolations) != 0 {
+		t.Fatalf("T2 failed under parallel execution: %+v (ver=%+v)", res2[0], res2[0].Verification)
+	}
+}
+
+func TestCleanupDoesNotTriggerDeletedViolation(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		name: "codex",
+		handler: func(call int, ctx context.Context, req provider.RunRequest) (provider.Run, error) {
+			if err := os.WriteFile(filepath.Join(req.Dir, "clean.txt"), []byte("ok\n"), 0o644); err != nil {
+				return nil, err
+			}
+			wt, err := gitx.Open(req.Dir)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := wt.CommitAll(ctx, "add clean.txt"); err != nil {
+				return nil, err
+			}
+			sha, _ := wt.RevParse(ctx, "HEAD")
+			return newFakeRun("sid-cl", []string{`{"ok":1}`}, provider.Final{
+				Text:      receiptBlock("T1", "done", "clean.txt", []string{sha}, "echo ok"),
+				SessionID: "sid-cl",
+			}), nil
+		},
+	}
+
+	eng, r, _ := setupPlanApprovedEngine(t, testConfig(), prov, nil)
+	id, err := eng.Spawn(ctx, "T1", "", "", "", "limpia")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = eng.Wait(ctx, []string{id}, 10*time.Second)
+
+	branch := eng.State().Agent(id).Branch
+	sessRepo, err := gitx.Open(eng.State().SessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessRepo.MergeFFOnly(ctx, branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Cleanup(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	violations := eng.CheckRefs(ctx)
+	if len(violations) != 0 {
+		t.Fatalf("CheckRefs() after Cleanup = %+v, want empty", violations)
+	}
+	if _, err := r.RevParse(ctx, "refs/heads/"+branch); err == nil {
+		t.Fatalf("Cleanup branch %s was resurrected", branch)
+	}
+}
