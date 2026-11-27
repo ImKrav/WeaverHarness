@@ -86,6 +86,7 @@ jobs:
           mkdir -p dist
           LDFLAGS="-s -w -X main.version=ci -X main.commit=${{ github.sha }}"
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o dist/weaver-linux-amd64 ./cmd/weaver
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o dist/weaver-linux-arm64 ./cmd/weaver
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o dist/weaver-windows-amd64.exe ./cmd/weaver
           GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o dist/weaver-darwin-arm64 ./cmd/weaver
 

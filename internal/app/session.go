@@ -64,6 +64,7 @@ type tuiSessionParams struct {
 	eng      *engine.Engine
 	orchRun  provider.Run
 	resume   bool
+	noMouse  bool
 }
 
 type tuiBridge struct {
@@ -294,6 +295,7 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 		eng:      eng,
 		orchRun:  orchRun,
 		resume:   o.Resume,
+		noMouse:  o.NoMouse,
 	}))
 	progOpts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
 	if !o.NoMouse {
@@ -387,6 +389,7 @@ func buildTUIOptions(p tuiSessionParams) tui.Options {
 	return tui.Options{
 		Title:            title,
 		OrchestratorName: p.orchRole.Model,
+		MouseDisabled:    p.noMouse,
 		Send:             sendFn,
 		Detail:           detailFn,
 		Preview:          previewFn,

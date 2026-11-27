@@ -76,6 +76,7 @@ type agentCancelledMsg struct {
 type Options struct {
 	Title            string
 	OrchestratorName string
+	MouseDisabled    bool
 	Send             func(string) error
 	Detail           func(agentID string) AgentDetail
 	Preview          func(req engine.ApprovalRequest) (string, error)
@@ -96,8 +97,9 @@ type Model struct {
 	cancelFn      func(agentID string) error
 	onChatEntryFn func(role, text string)
 
-	width  int
-	height int
+	width        int
+	height       int
+	mouseEnabled bool
 
 	viewport    viewport.Model
 	input       textarea.Model
@@ -145,8 +147,9 @@ func NewWithOptions(o Options) Model {
 		orchLabel = "orquestador"
 	}
 
+	mouseOn := !o.MouseDisabled
 	vp := viewport.New(66, 19)
-	vp.MouseWheelEnabled = true
+	vp.MouseWheelEnabled = mouseOn
 	m := Model{
 		title:         o.Title,
 		orchLabel:     orchLabel,
@@ -157,6 +160,7 @@ func NewWithOptions(o Options) Model {
 		onChatEntryFn: o.OnChatEntry,
 		width:         100,
 		height:        28,
+		mouseEnabled:  mouseOn,
 		viewport:      vp,
 		input:         ta,
 		spinner:       sp,
@@ -227,7 +231,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			vp := viewport.New(innerW, vpH)
-			vp.MouseWheelEnabled = true
+			vp.MouseWheelEnabled = m.mouseEnabled
 			vp.SetContent(wrapped)
 			m.modal = &modalState{
 				title:   msg.title,
@@ -385,6 +389,24 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
+	}
+
+	if msg.Type == tea.KeyF2 {
+		m.mouseEnabled = !m.mouseEnabled
+		m.viewport.MouseWheelEnabled = m.mouseEnabled
+		if m.modal != nil {
+			m.modal.vp.MouseWheelEnabled = m.mouseEnabled
+		}
+		if m.mouseEnabled {
+			note := "Captura de ratón activada (F2 para desactivar)."
+			m.appendChat(styleDim.Render(note))
+			m.recordChat("system", note)
+			return m, tea.EnableMouseCellMotion
+		}
+		note := "Captura de ratón desactivada: puedes seleccionar texto directamente (F2 para reactivar)."
+		m.appendChat(styleDim.Render(note))
+		m.recordChat("system", note)
+		return m, tea.DisableMouse
 	}
 
 	if m.modal != nil {

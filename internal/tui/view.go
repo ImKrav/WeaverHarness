@@ -63,6 +63,11 @@ func (m Model) View() string {
 }
 
 func (m Model) renderHelpFooter(totalW int) string {
+	mouseState := "on"
+	if !m.mouseEnabled {
+		mouseState = "off"
+	}
+
 	var help string
 	switch {
 	case m.confirmCancel != "":
@@ -72,9 +77,9 @@ func (m Model) renderHelpFooter(totalW int) string {
 	case m.pendingApproval != nil:
 		help = "[a] aprobar  [r] rechazar  [v] ver detalle  ·  Ctrl+C salir"
 	case m.panelFocused:
-		help = "↑/↓ elegir · Enter detalle · x cancelar · Esc chat"
+		help = "↑/↓ elegir · Enter detalle · x cancelar · Esc chat · F2 ratón: " + mouseState
 	default:
-		help = "Tab panel · Ctrl+J nueva línea · Shift+arrastrar copiar · Ctrl+C salir"
+		help = "Tab panel · Ctrl+J nueva línea · Shift+arrastrar copiar · Ctrl+C salir · F2 ratón: " + mouseState
 	}
 
 	if m.unreadBelow > 0 {

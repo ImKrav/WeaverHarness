@@ -941,3 +941,49 @@ func TestMultilineInputCtrlJAndAltEnter(t *testing.T) {
 		t.Fatalf("sent = %q, want [%q]", sent, wantVal)
 	}
 }
+
+func TestToggleMouseWithF2(t *testing.T) {
+	m := NewWithOptions(Options{
+		Title: "WeaverHarness",
+	})
+	if !m.mouseEnabled {
+		t.Fatal("mouseEnabled = false by default, want true")
+	}
+	if !strings.Contains(m.View(), "F2 ratón: on") {
+		t.Fatalf("View() missing 'F2 ratón: on':\n%s", m.View())
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyF2})
+	m = next.(Model)
+	if m.mouseEnabled {
+		t.Fatal("mouseEnabled remained true after first F2")
+	}
+	if cmd == nil {
+		t.Fatal("first F2 returned nil cmd, want tea.DisableMouse")
+	}
+	vOff := m.View()
+	if !strings.Contains(vOff, "F2 ratón: off") || !strings.Contains(vOff, "ratón desactivada") {
+		t.Fatalf("View() missing off state / system chat note after first F2:\n%s", vOff)
+	}
+
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyF2})
+	m = next.(Model)
+	if !m.mouseEnabled {
+		t.Fatal("mouseEnabled remained false after second F2")
+	}
+	if cmd == nil {
+		t.Fatal("second F2 returned nil cmd, want tea.EnableMouseCellMotion")
+	}
+	vOn := m.View()
+	if !strings.Contains(vOn, "F2 ratón: on") || !strings.Contains(vOn, "ratón activada") {
+		t.Fatalf("View() missing on state / system chat note after second F2:\n%s", vOn)
+	}
+
+	mDisabled := NewWithOptions(Options{
+		Title:         "WeaverHarness",
+		MouseDisabled: true,
+	})
+	if mDisabled.mouseEnabled {
+		t.Fatal("MouseDisabled: true should initialize mouseEnabled = false")
+	}
+}
