@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -97,10 +100,25 @@ func Doctor(ctx context.Context, dir string, out io.Writer) int {
 			}
 			notes = append(notes, singleLine)
 		}
+		if !h.Installed {
+			notes = append(notes, provider.InstallHint(runtime.GOOS, name))
+		}
 
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, installed, version, logged, strings.Join(notes, "; "))
 	}
 	_ = tw.Flush()
+
+	if runtime.GOOS == "windows" {
+		if gitPath, lookErr := exec.LookPath("git"); lookErr == nil {
+			outLP, lpErr := exec.CommandContext(ctx, gitPath, "config", "--get", "core.longpaths").Output()
+			var exitErr *exec.ExitError
+			unset := lpErr != nil && errors.As(lpErr, &exitErr) && exitErr.ExitCode() == 1
+			notTrue := lpErr == nil && !strings.EqualFold(strings.TrimSpace(string(outLP)), "true")
+			if unset || notTrue {
+				_, _ = fmt.Fprintln(out, "\nSugerencia Windows: ejecuta 'git config --global core.longpaths true' para evitar errores de ruta larga en worktrees.")
+			}
+		}
+	}
 
 	orchRole := cfg.Roles[cfg.Orchestrator]
 	orchHealth := healths[orchRole.Provider]

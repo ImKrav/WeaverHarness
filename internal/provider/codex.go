@@ -24,7 +24,7 @@ func (c *codexProvider) Name() string {
 }
 
 func (c *codexProvider) Check(ctx context.Context) Health {
-	resolved, err := exec.LookPath(c.bin)
+	resolved, err := resolveBinary(c.Name(), c.bin)
 	if err != nil {
 		return Health{Installed: false, Detail: err.Error()}
 	}
@@ -52,6 +52,7 @@ func (c *codexProvider) Start(ctx context.Context, req RunRequest) (Run, error) 
 
 	args := buildCodexArgs(req)
 	return startJSONL(ctx, jsonlConfig{
+		Provider:   c.Name(),
 		Bin:        c.bin,
 		Args:       args,
 		Dir:        req.Dir,

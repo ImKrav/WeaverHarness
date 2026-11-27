@@ -23,7 +23,7 @@ func (c *claudeProvider) Name() string {
 }
 
 func (c *claudeProvider) Check(ctx context.Context) Health {
-	resolved, err := exec.LookPath(c.bin)
+	resolved, err := resolveBinary(c.Name(), c.bin)
 	if err != nil {
 		return Health{Installed: false, Detail: err.Error()}
 	}
@@ -49,6 +49,7 @@ func (c *claudeProvider) Start(ctx context.Context, req RunRequest) (Run, error)
 	}
 
 	cfg := jsonlConfig{
+		Provider:   c.Name(),
 		Bin:        c.bin,
 		Args:       args,
 		Dir:        req.Dir,

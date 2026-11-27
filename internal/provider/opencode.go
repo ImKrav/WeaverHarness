@@ -24,7 +24,7 @@ func (o *opencodeProvider) Name() string {
 }
 
 func (o *opencodeProvider) Check(ctx context.Context) Health {
-	resolved, err := exec.LookPath(o.bin)
+	resolved, err := resolveBinary(o.Name(), o.bin)
 	if err != nil {
 		return Health{Installed: false, Detail: err.Error()}
 	}
@@ -79,6 +79,7 @@ func (o *opencodeProvider) Start(ctx context.Context, req RunRequest) (Run, erro
 	args := buildOpenCodeArgs(req.Model, sid)
 	var lastMsgID string
 	return startJSONL(ctx, jsonlConfig{
+		Provider:   o.Name(),
 		Bin:        o.bin,
 		Args:       args,
 		Dir:        req.Dir,

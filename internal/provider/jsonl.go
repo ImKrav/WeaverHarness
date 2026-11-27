@@ -54,6 +54,7 @@ type jsonlState struct {
 }
 
 type jsonlConfig struct {
+	Provider   string
 	Bin        string
 	Args       []string
 	Dir        string
@@ -82,7 +83,7 @@ type jsonlRun struct {
 }
 
 func startJSONL(ctx context.Context, cfg jsonlConfig) (*jsonlRun, error) {
-	resolvedBin, err := exec.LookPath(cfg.Bin)
+	resolvedBin, err := resolveBinary(cfg.Provider, cfg.Bin)
 	if err != nil {
 		return nil, &ProviderError{Class: NotInstalled, Msg: err.Error()}
 	}

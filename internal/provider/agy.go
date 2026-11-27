@@ -32,7 +32,7 @@ func (a *agyProvider) Name() string {
 }
 
 func (a *agyProvider) Check(ctx context.Context) Health {
-	resolved, err := exec.LookPath(a.bin)
+	resolved, err := resolveBinary(a.Name(), a.bin)
 	if err != nil {
 		return Health{Installed: false, Detail: err.Error()}
 	}
@@ -82,7 +82,7 @@ func (a *agyProvider) Start(ctx context.Context, req RunRequest) (Run, error) {
 		return nil, errors.New("v1: solo claude puede ser orquestador")
 	}
 
-	resolvedBin, err := exec.LookPath(a.bin)
+	resolvedBin, err := resolveBinary(a.Name(), a.bin)
 	if err != nil {
 		return nil, &ProviderError{Class: NotInstalled, Msg: err.Error()}
 	}
