@@ -66,7 +66,7 @@ func TestUnknownSubcommandExitTwo(t *testing.T) {
 }
 
 func TestUnexpectedExtraArgsExitTwo(t *testing.T) {
-	for _, args := range [][]string{{"runs", "extra"}, {"doctor", "extra"}, {"version", "extra"}} {
+	for _, args := range [][]string{{"runs", "extra"}, {"doctor", "extra"}, {"version", "extra"}, {"config"}, {"config", "inventado"}, {"config", "show", "extra"}} {
 		var stdout, stderr bytes.Buffer
 		code := runMainWith(args, cliDeps{
 			getwd:  func() (string, error) { return t.TempDir(), nil },

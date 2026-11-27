@@ -1,13 +1,16 @@
 package config
 
 import (
+	"bytes"
 	_ "embed"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -59,6 +62,107 @@ type Config struct {
 	TaskTimeout  Duration               `toml:"task_timeout"`
 	Roles        map[string]Role        `toml:"roles"`
 	Providers    map[string]ProviderCfg `toml:"providers"`
+}
+
+// Preset defines a named role assignment profile.
+type Preset struct {
+	Name        string
+	Description string
+	Roles       map[string]Role
+}
+
+var builtinPresets = []Preset{
+	{
+		Name:        "default",
+		Description: "architect=claude/opus, implementer=antigravity/gemini-4-hydrogen, reviewer=codex/gpt-5.6-sol",
+		Roles: map[string]Role{
+			"architect":   {Provider: "claude", Model: "opus"},
+			"implementer": {Provider: "antigravity", Model: "gemini-4-hydrogen"},
+			"reviewer":    {Provider: "codex", Model: "gpt-5.6-sol"},
+		},
+	},
+	{
+		Name:        "claude-codex",
+		Description: "architect=claude/opus, implementer=codex/gpt-5.6-sol, reviewer=codex/gpt-5.6-sol",
+		Roles: map[string]Role{
+			"architect":   {Provider: "claude", Model: "opus"},
+			"implementer": {Provider: "codex", Model: "gpt-5.6-sol"},
+			"reviewer":    {Provider: "codex", Model: "gpt-5.6-sol"},
+		},
+	},
+	{
+		Name:        "claude-opencode",
+		Description: "architect=claude/opus, implementer=opencode/opencode/big-pickle, reviewer=codex/gpt-5.6-sol",
+		Roles: map[string]Role{
+			"architect":   {Provider: "claude", Model: "opus"},
+			"implementer": {Provider: "opencode", Model: "opencode/big-pickle"},
+			"reviewer":    {Provider: "codex", Model: "gpt-5.6-sol"},
+		},
+	},
+	{
+		Name:        "claude-only",
+		Description: "architect=claude/opus, implementer=claude/sonnet, reviewer=claude/sonnet",
+		Roles: map[string]Role{
+			"architect":   {Provider: "claude", Model: "opus"},
+			"implementer": {Provider: "claude", Model: "sonnet"},
+			"reviewer":    {Provider: "claude", Model: "sonnet"},
+		},
+	},
+}
+
+// Presets returns all built-in role configuration presets.
+func Presets() []Preset {
+	out := make([]Preset, len(builtinPresets))
+	for i, p := range builtinPresets {
+		out[i] = Preset{
+			Name:        p.Name,
+			Description: p.Description,
+			Roles:       maps.Clone(p.Roles),
+		}
+	}
+	return out
+}
+
+// ApplyPreset overrides cfg.Roles according to the named preset and validates the result.
+func ApplyPreset(cfg Config, name string) (Config, error) {
+	target := strings.TrimSpace(name)
+	var found *Preset
+	names := make([]string, 0, len(builtinPresets))
+	for i := range builtinPresets {
+		names = append(names, builtinPresets[i].Name)
+		if builtinPresets[i].Name == target {
+			found = &builtinPresets[i]
+		}
+	}
+	if found == nil {
+		return Config{}, fmt.Errorf("config: preset desconocido %q (válidos: %s)", name, strings.Join(names, ", "))
+	}
+
+	next := cfg
+	next.Roles = maps.Clone(cfg.Roles)
+	if next.Roles == nil {
+		next.Roles = make(map[string]Role, len(found.Roles))
+	}
+	for roleName, role := range found.Roles {
+		next.Roles[roleName] = role
+	}
+	if cfg.Providers != nil {
+		next.Providers = maps.Clone(cfg.Providers)
+	}
+	if err := validate(&next); err != nil {
+		return Config{}, err
+	}
+	return next, nil
+}
+
+// RenderTOML serializes cfg as a valid TOML document.
+func RenderTOML(cfg Config) (string, error) {
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
+	if err := enc.Encode(cfg); err != nil {
+		return "", fmt.Errorf("config: serializando TOML: %w", err)
+	}
+	return buf.String(), nil
 }
 
 // Default returns the embedded default configuration.

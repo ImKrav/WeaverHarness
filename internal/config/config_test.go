@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 func TestDefault(t *testing.T) {
@@ -161,5 +163,58 @@ func TestGlobalPath(t *testing.T) {
 	}
 	if !strings.HasSuffix(filepath.ToSlash(p), "/weaver/config.toml") {
 		t.Fatalf("GlobalPath() = %q, want suffix /weaver/config.toml", p)
+	}
+}
+
+func TestApplyPresetAndRenderRoundTrip(t *testing.T) {
+	presets := Presets()
+	if len(presets) != 4 {
+		t.Fatalf("len(Presets()) = %d, want 4", len(presets))
+	}
+
+	base := Default()
+	pc := base.Providers["claude"]
+	pc.Bin = "/custom/claude"
+	pc.MaxParallel = 5
+	base.Providers["claude"] = pc
+
+	applied, err := ApplyPreset(base, "claude-codex")
+	if err != nil {
+		t.Fatalf("ApplyPreset(claude-codex) error: %v", err)
+	}
+	if applied.Providers["claude"].Bin != "/custom/claude" || applied.Providers["claude"].MaxParallel != 5 {
+		t.Fatalf("Providers[claude] was not preserved: %+v", applied.Providers["claude"])
+	}
+	if got := applied.Roles["implementer"]; got != (Role{Provider: "codex", Model: "gpt-5.6-sol"}) {
+		t.Fatalf("implementer = %+v, want {codex gpt-5.6-sol}", got)
+	}
+
+	_, err = ApplyPreset(base, "no-existe")
+	if err == nil {
+		t.Fatal("ApplyPreset(no-existe) succeeded, want error")
+	}
+	for _, wantName := range []string{"default", "claude-codex", "claude-opencode", "claude-only"} {
+		if !strings.Contains(err.Error(), wantName) {
+			t.Fatalf("unknown preset error %q missing %q", err.Error(), wantName)
+		}
+	}
+
+	rendered, err := RenderTOML(applied)
+	if err != nil {
+		t.Fatalf("RenderTOML() error: %v", err)
+	}
+	if !strings.Contains(rendered, "10m0s") || !strings.Contains(rendered, "30m0s") {
+		t.Fatalf("RenderTOML() missing serialized durations:\n%s", rendered)
+	}
+
+	var decoded Config
+	if _, err := toml.Decode(rendered, &decoded); err != nil {
+		t.Fatalf("toml.Decode(RenderTOML) error: %v\n%s", err, rendered)
+	}
+	if decoded.CheckTimeout.Duration != applied.CheckTimeout.Duration ||
+		decoded.TaskTimeout.Duration != applied.TaskTimeout.Duration ||
+		decoded.Roles["implementer"] != applied.Roles["implementer"] ||
+		decoded.Providers["claude"] != applied.Providers["claude"] {
+		t.Fatalf("round-trip mismatch:\ngot:  %+v\nwant: %+v", decoded, applied)
 	}
 }

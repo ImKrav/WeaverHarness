@@ -39,13 +39,15 @@ var OrchestratorTools = []string{
 
 // SessionOptions configures a RunSession invocation.
 type SessionOptions struct {
-	Dir      string
-	ResumeID string
-	Resume   bool
-	NoMouse  bool
-	In       io.Reader
-	Out      io.Writer
-	Headless func(send func(string) error, events <-chan provider.Event) error
+	Dir           string
+	ResumeID      string
+	Resume        bool
+	Preset        string
+	SkipPreflight bool
+	NoMouse       bool
+	In            io.Reader
+	Out           io.Writer
+	Headless      func(send func(string) error, events <-chan provider.Event) error
 }
 
 type chatEntry struct {
@@ -145,15 +147,17 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 		}
 	}
 
-	if err := ensureWeaverExcluded(ctx, repo); err != nil {
-		return err
-	}
-
 	globalPath, _ := config.GlobalPath()
 	projectPath := filepath.Join(repo.Dir, ".weaver", "config.toml")
 	cfg, err := config.Load(globalPath, projectPath)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(o.Preset) != "" {
+		cfg, err = config.ApplyPreset(cfg, o.Preset)
+		if err != nil {
+			return err
+		}
 	}
 
 	providers := make(map[string]provider.Provider, len(config.ProviderNames))
@@ -163,6 +167,25 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 			return err
 		}
 		providers[name] = p
+	}
+
+	orchRole := cfg.Roles[cfg.Orchestrator]
+	orchProv := providers[orchRole.Provider]
+	if !o.SkipPreflight {
+		preCtx, preCancel := context.WithTimeout(ctx, 10*time.Second)
+		h := orchProv.Check(preCtx)
+		preCancel()
+		if !h.Installed || !h.LoggedIn {
+			detail := strings.TrimSpace(h.Detail)
+			if detail == "" {
+				detail = "CLI no instalado o sin sesión iniciada"
+			}
+			return fmt.Errorf("preflight: el orquestador (%s/%s) no está listo (%s). Ejecuta 'weaver doctor' o inicia sesión en el CLI", orchRole.Provider, orchRole.Model, detail)
+		}
+	}
+
+	if err := ensureWeaverExcluded(ctx, repo); err != nil {
+		return err
 	}
 
 	store := run.Store{Root: filepath.Join(repo.Dir, ".weaver", "runs")}
@@ -227,8 +250,6 @@ func RunSession(ctx context.Context, o SessionOptions) error {
 		return fmt.Errorf("app: escribiendo prompt del orquestador: %w", err)
 	}
 
-	orchRole := cfg.Roles[cfg.Orchestrator]
-	orchProv := providers[orchRole.Provider]
 	req := provider.RunRequest{
 		Mode:             provider.Orchestrator,
 		Dir:              st.SessionDir,
@@ -670,7 +691,11 @@ func readTailLines(path string, maxLines int) string {
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(strings.TrimRight(string(data), "\r\n"), "\n")
+	trimmed := strings.TrimRight(string(data), "\r\n")
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}

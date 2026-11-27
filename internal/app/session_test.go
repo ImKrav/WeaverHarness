@@ -169,9 +169,10 @@ func TestOrchestratorLaunchArgs(t *testing.T) {
 
 	var gotText string
 	err := RunSession(ctx, SessionOptions{
-		Dir: r.Dir,
-		In:  strings.NewReader("s\n"),
-		Out: &out,
+		Dir:           r.Dir,
+		SkipPreflight: true,
+		In:            strings.NewReader("s\n"),
+		Out:           &out,
 		Headless: func(send func(string) error, events <-chan provider.Event) error {
 			if err := send("hola orquestador"); err != nil {
 				return err
@@ -222,6 +223,44 @@ func TestOrchestratorLaunchArgs(t *testing.T) {
 		if !slices.Contains(args, tool) {
 			t.Fatalf("missing tool %q in args %v", tool, args)
 		}
+	}
+}
+
+func TestRunSessionPreflightFailsFastWithoutCreatingRun(t *testing.T) {
+	r := newAppTestRepo(t)
+	cfgDir := filepath.Join(r.Dir, ".weaver")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgTOML := "[providers.claude]\nbin = 'weaver-missing-claude-preflight-xyz'\n"
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(cfgTOML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	headlessCalled := false
+	err := RunSession(context.Background(), SessionOptions{
+		Dir:           r.Dir,
+		SkipPreflight: false,
+		In:            strings.NewReader("s\n"),
+		Out:           &bytes.Buffer{},
+		Headless: func(send func(string) error, events <-chan provider.Event) error {
+			headlessCalled = true
+			return nil
+		},
+	})
+	if err == nil {
+		t.Fatal("RunSession() with missing orchestrator bin succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "weaver doctor") {
+		t.Fatalf("preflight error %q missing 'weaver doctor' hint", err.Error())
+	}
+	if headlessCalled {
+		t.Fatal("Headless was invoked despite preflight failure")
+	}
+	if _, statErr := os.Stat(filepath.Join(r.Dir, ".weaver", "runs")); !os.IsNotExist(statErr) {
+		t.Fatalf(".weaver/runs was created despite preflight failure")
 	}
 }
 

@@ -29,16 +29,21 @@ func usage(w io.Writer) {
 
 Comandos:
   (sin argumentos)                    Inicia una sesión interactiva (TUI) en el repositorio actual
-  resume [run-id]                     Reanuda la última ejecución o la indicada por run-id
+  resume [--preset N] [--skip-check] [--no-mouse] [run-id]
+                                      Reanuda la última ejecución o la indicada por run-id
   runs                                Lista las ejecuciones guardadas en .weaver/runs
   inspect [--json] [run-id]           Muestra estado, tareas, agentes y recibos de una ejecución
   logs [--tail N] [--only-receipt] [run-id] <agent-id>
                                       Muestra recibo, verificación y últimas líneas del transcript
   clean [--dry-run] [--all] [--force] Limpia worktrees, ramas weaver/* y runs finalizados
+  config <show|init> [opciones]       Muestra o inicializa .weaver/config.toml (con --preset)
   doctor                              Comprueba instalación, sesión y modelos de los CLIs proveedores
   version                             Muestra la versión compilada de weaver
 
-Opciones:
+Opciones globales / de sesión:
+  --preset <nombre>                   Aplica un preset (default, claude-codex, claude-opencode, claude-only)
+  --skip-check                        Omite la verificación previa del CLI orquestador al arrancar
+  --no-mouse                          Desactiva captura de ratón en la TUI para facilitar copiar/pegar
   -v, --version                       Muestra la versión compilada de weaver
   -h, --help                          Muestra esta ayuda`)
 }
@@ -72,9 +77,13 @@ func runMainWith(args []string, deps cliDeps) int {
 
 	fs := flag.NewFlagSet("weaver", flag.ContinueOnError)
 	fs.SetOutput(deps.stderr)
-	var showVersion bool
+	var showVersion, skipCheck, noMouse bool
+	var preset string
 	fs.BoolVar(&showVersion, "v", false, "Muestra la versión compilada")
 	fs.BoolVar(&showVersion, "version", false, "Muestra la versión compilada")
+	fs.StringVar(&preset, "preset", "", "Aplica un preset de roles")
+	fs.BoolVar(&skipCheck, "skip-check", false, "Omite el pre-check de arranque")
+	fs.BoolVar(&noMouse, "no-mouse", false, "Desactiva captura de ratón en la TUI")
 	fs.Usage = func() { usage(deps.stderr) }
 
 	if err := fs.Parse(args); err != nil {
@@ -111,9 +120,12 @@ func runMainWith(args []string, deps cliDeps) int {
 
 	if len(rest) == 0 {
 		if err := app.RunSession(context.Background(), app.SessionOptions{
-			Dir: cwd,
-			In:  deps.stdin,
-			Out: deps.stdout,
+			Dir:           cwd,
+			Preset:        preset,
+			SkipPreflight: skipCheck,
+			NoMouse:       noMouse,
+			In:            deps.stdin,
+			Out:           deps.stdout,
 		}); err != nil {
 			fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 			return 1
@@ -123,20 +135,40 @@ func runMainWith(args []string, deps cliDeps) int {
 
 	switch rest[0] {
 	case "resume":
-		if len(rest) > 2 {
-			fmt.Fprintf(deps.stderr, "Uso: weaver resume [run-id]\n")
+		sub := flag.NewFlagSet("resume", flag.ContinueOnError)
+		sub.SetOutput(deps.stderr)
+		subPreset := preset
+		subSkipCheck := skipCheck
+		subNoMouse := noMouse
+		sub.StringVar(&subPreset, "preset", subPreset, "Aplica un preset de roles")
+		sub.BoolVar(&subSkipCheck, "skip-check", subSkipCheck, "Omite el pre-check de arranque")
+		sub.BoolVar(&subNoMouse, "no-mouse", subNoMouse, "Desactiva captura de ratón en la TUI")
+		sub.Usage = func() {
+			fmt.Fprintln(deps.stderr, "Uso: weaver resume [--preset <nombre>] [--skip-check] [--no-mouse] [run-id]")
+		}
+		if err := sub.Parse(rest[1:]); err != nil {
+			if err == flag.ErrHelp {
+				return 0
+			}
+			return 2
+		}
+		if sub.NArg() > 1 {
+			sub.Usage()
 			return 2
 		}
 		var runID string
-		if len(rest) == 2 {
-			runID = rest[1]
+		if sub.NArg() == 1 {
+			runID = sub.Arg(0)
 		}
 		if err := app.RunSession(context.Background(), app.SessionOptions{
-			Dir:      cwd,
-			Resume:   true,
-			ResumeID: runID,
-			In:       deps.stdin,
-			Out:      deps.stdout,
+			Dir:           cwd,
+			Resume:        true,
+			ResumeID:      runID,
+			Preset:        subPreset,
+			SkipPreflight: subSkipCheck,
+			NoMouse:       subNoMouse,
+			In:            deps.stdin,
+			Out:           deps.stdout,
 		}); err != nil {
 			fmt.Fprintf(deps.stderr, "Error al reanudar: %v\n", err)
 			return 1
@@ -261,6 +293,83 @@ func runMainWith(args []string, deps cliDeps) int {
 			return 1
 		}
 		return 0
+
+	case "config":
+		if len(rest) < 2 {
+			fmt.Fprintln(deps.stderr, "Uso: weaver config <show|init> [opciones]")
+			return 2
+		}
+		switch rest[1] {
+		case "-h", "--help", "help":
+			fmt.Fprintln(deps.stderr, `Uso:
+  weaver config show [--preset <nombre>]
+  weaver config init [--preset <nombre>] [--global] [--force]`)
+			return 0
+		case "show":
+			sub := flag.NewFlagSet("config show", flag.ContinueOnError)
+			sub.SetOutput(deps.stderr)
+			subPreset := preset
+			sub.StringVar(&subPreset, "preset", subPreset, "Muestra la configuración aplicando un preset")
+			sub.Usage = func() {
+				fmt.Fprintln(deps.stderr, "Uso: weaver config show [--preset <nombre>]")
+			}
+			if err := sub.Parse(rest[2:]); err != nil {
+				if err == flag.ErrHelp {
+					return 0
+				}
+				return 2
+			}
+			if sub.NArg() > 0 {
+				sub.Usage()
+				return 2
+			}
+			if err := app.ConfigShow(app.ConfigShowOptions{
+				Dir:    cwd,
+				Preset: subPreset,
+				Out:    deps.stdout,
+			}); err != nil {
+				fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+
+		case "init":
+			sub := flag.NewFlagSet("config init", flag.ContinueOnError)
+			sub.SetOutput(deps.stderr)
+			subPreset := preset
+			var globalFlag, forceFlag bool
+			sub.StringVar(&subPreset, "preset", subPreset, "Preset inicial a escribir")
+			sub.BoolVar(&globalFlag, "global", false, "Escribe en la configuración global de usuario")
+			sub.BoolVar(&forceFlag, "force", false, "Sobrescribe si el archivo ya existe")
+			sub.Usage = func() {
+				fmt.Fprintln(deps.stderr, "Uso: weaver config init [--preset <nombre>] [--global] [--force]")
+			}
+			if err := sub.Parse(rest[2:]); err != nil {
+				if err == flag.ErrHelp {
+					return 0
+				}
+				return 2
+			}
+			if sub.NArg() > 0 {
+				sub.Usage()
+				return 2
+			}
+			if err := app.ConfigInit(app.ConfigInitOptions{
+				Dir:    cwd,
+				Preset: subPreset,
+				Global: globalFlag,
+				Force:  forceFlag,
+				Out:    deps.stdout,
+			}); err != nil {
+				fmt.Fprintf(deps.stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+
+		default:
+			fmt.Fprintf(deps.stderr, "Subcomando desconocido de config: %q\nUso: weaver config <show|init> [opciones]\n", rest[1])
+			return 2
+		}
 
 	case "doctor":
 		if len(rest) > 1 {
