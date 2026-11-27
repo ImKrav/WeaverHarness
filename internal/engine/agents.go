@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -62,9 +64,18 @@ func (e *Engine) Spawn(ctx context.Context, taskID, role, prov, model, instructi
 
 	p, ok := e.providers[prov]
 	if !ok {
+		avail := make([]string, 0, len(e.providers))
+		for name := range e.providers {
+			avail = append(avail, name)
+		}
+		slices.Sort(avail)
 		e.mu.Unlock()
 		e.guardMu.Unlock()
-		return "", fmt.Errorf("engine: proveedor %q no configurado", prov)
+		availText := "ninguno"
+		if len(avail) > 0 {
+			availText = strings.Join(avail, ", ")
+		}
+		return "", fmt.Errorf("engine: proveedor %q no configurado (disponibles: %s)", prov, availText)
 	}
 
 	agentID := e.state.NewAgentID()
@@ -261,6 +272,7 @@ func (e *Engine) runAgent(
 	case sem <- struct{}{}:
 		defer func() { <-sem }()
 	case <-runCtx.Done():
+		e.cleanupCancelledQueued(agentID)
 		e.markCancelled(agentID)
 		return
 	}
@@ -268,6 +280,7 @@ func (e *Engine) runAgent(
 	e.mu.Lock()
 	if e.cancelled[agentID] || e.state == nil {
 		e.mu.Unlock()
+		e.cleanupCancelledQueued(agentID)
 		e.markCancelled(agentID)
 		return
 	}
@@ -432,6 +445,44 @@ func (e *Engine) runAgent(
 	e.mu.Unlock()
 
 	e.notify(infos)
+}
+
+func (e *Engine) cleanupCancelledQueued(agentID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	e.guardMu.Lock()
+	defer e.guardMu.Unlock()
+
+	e.mu.Lock()
+	if e.state == nil {
+		e.mu.Unlock()
+		return
+	}
+	ag := e.state.Agent(agentID)
+	if ag == nil {
+		e.mu.Unlock()
+		return
+	}
+	branch := ag.Branch
+	base := ag.Base
+	worktree := ag.Worktree
+	sessID := ag.SessionID
+	e.mu.Unlock()
+
+	if sessID != "" || worktree == "" || branch == "" {
+		return
+	}
+	if base != "" && e.hasCommitsOverBase(ctx, base, branch) {
+		return
+	}
+	if _, err := os.Stat(worktree); err == nil {
+		_ = e.repo.RemoveWorktree(ctx, worktree)
+	}
+	if _, err := e.repo.RevParse(ctx, "refs/heads/"+branch); err == nil {
+		_ = e.repo.DeleteBranch(ctx, branch)
+	}
+	_ = e.guard.Rebase(ctx)
 }
 
 func (e *Engine) executeProvider(

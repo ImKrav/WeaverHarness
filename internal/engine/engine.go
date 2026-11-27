@@ -254,8 +254,11 @@ func (e *Engine) allocateRunIDLocked(ctx context.Context) string {
 	}
 }
 
-// Resume loads runID (or the latest run when empty) and marks queued/running agents interrupted.
+// Resume loads runID (or the latest run when empty), recreates the session worktree if missing,
+// and marks queued/running agents interrupted.
 func (e *Engine) Resume(ctx context.Context, runID string) (*run.State, error) {
+	e.guardMu.Lock()
+	defer e.guardMu.Unlock()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -270,6 +273,24 @@ func (e *Engine) Resume(ctx context.Context, runID string) (*run.State, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	if st.SessionDir != "" {
+		if _, statErr := os.Stat(st.SessionDir); errors.Is(statErr, os.ErrNotExist) {
+			integRef := st.IntegrationBranch
+			if integRef == "" {
+				integRef = "weaver/" + st.RunID
+			}
+			if _, revErr := e.repo.RevParse(ctx, "refs/heads/"+integRef); revErr != nil {
+				return nil, fmt.Errorf("engine: no se puede reanudar %s: el worktree %s no existe y la rama %s ya no existe", st.RunID, st.SessionDir, integRef)
+			}
+			if err := e.repo.AttachWorktree(ctx, st.SessionDir, integRef); err != nil {
+				return nil, fmt.Errorf("engine: recreando worktree de sesión %s: %w", st.SessionDir, err)
+			}
+			if err := e.guard.Rebase(ctx); err != nil {
+				return nil, fmt.Errorf("engine: actualizando guardia de refs tras reanudar: %w", err)
+			}
+		}
 	}
 
 	st.MarkInterrupted()

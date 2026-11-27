@@ -246,6 +246,42 @@ func TestNextRunAfterIntegration(t *testing.T) {
 	}
 }
 
+func TestSecondSpecAfterIntegrationStartsNewRun(t *testing.T) {
+	ctx := context.Background()
+	eng, _, _, _ := setupAcceptedTaskInEngine(t, []string{"echo ok"}, true)
+	if err := eng.SetOrchestratorSessionID("orch-sid-1"); err != nil {
+		t.Fatal(err)
+	}
+	firstRunID := eng.State().RunID
+	sessionDir := eng.State().SessionDir
+
+	if ok, _, err := eng.RequestApproval(ctx, ApprovalRequest{Kind: "integration", Path: "docs/plan.md", Summary: "merge"}); err != nil || !ok {
+		t.Fatalf("integration failed: %v", err)
+	}
+	if eng.State().Phase != run.PhaseIntegrated {
+		t.Fatalf("Phase = %s, want integrated", eng.State().Phase)
+	}
+
+	ok, _, err := eng.RequestApproval(ctx, ApprovalRequest{Kind: "spec", Path: "docs/specs/second.md", Summary: "second spec"})
+	if err != nil || !ok {
+		t.Fatalf("second spec approval failed: ok=%v err=%v", ok, err)
+	}
+
+	st := eng.State()
+	if st.RunID == firstRunID {
+		t.Fatalf("RunID = %q, want new RunID distinct from %q", st.RunID, firstRunID)
+	}
+	if st.Phase != run.PhaseSpecApproved {
+		t.Fatalf("Phase = %s, want spec_approved", st.Phase)
+	}
+	if st.SessionDir != sessionDir {
+		t.Fatalf("SessionDir = %q, want reused %q", st.SessionDir, sessionDir)
+	}
+	if st.OrchestratorSessionID != "orch-sid-1" {
+		t.Fatalf("OrchestratorSessionID = %q, want orch-sid-1", st.OrchestratorSessionID)
+	}
+}
+
 func TestIntegrationAfterCleanup(t *testing.T) {
 	ctx := context.Background()
 	eng, r, _, _ := setupAcceptedTaskInEngine(t, []string{"echo ok"}, true)

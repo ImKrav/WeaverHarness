@@ -230,3 +230,52 @@ func TestRepoDiffAndDiffStat(t *testing.T) {
 		t.Fatalf("Diff(filtered) = %q, want only %q", filtered, accentName)
 	}
 }
+
+func TestAttachWorktree(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+
+	wtPath := filepath.Join(WeaverDir(r.Dir), "session-rec")
+	t.Cleanup(func() {
+		_ = r.RemoveWorktree(ctx, wtPath)
+		_ = os.RemoveAll(WeaverDir(r.Dir))
+	})
+
+	if err := r.AddWorktree(ctx, wtPath, "weaver/rec", "main"); err != nil {
+		t.Fatal(err)
+	}
+	wtRepo, err := Open(wtPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtPath, "saved.txt"), []byte("saved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wtRepo.CommitAll(ctx, "saved"); err != nil {
+		t.Fatal(err)
+	}
+	wantSHA, err := wtRepo.RevParse(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate manual/external deletion of the worktree directory while branch remains.
+	if err := os.RemoveAll(wtPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.AttachWorktree(ctx, wtPath, "weaver/rec"); err != nil {
+		t.Fatalf("AttachWorktree() error: %v", err)
+	}
+	attached, err := Open(wtPath)
+	if err != nil {
+		t.Fatalf("Open(attached) error: %v", err)
+	}
+	gotSHA, err := attached.RevParse(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSHA != wantSHA {
+		t.Fatalf("attached HEAD = %s, want %s", gotSHA, wantSHA)
+	}
+}

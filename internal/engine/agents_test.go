@@ -923,3 +923,91 @@ func TestCleanupDoesNotTriggerDeletedViolation(t *testing.T) {
 		t.Fatalf("Cleanup branch %s was resurrected", branch)
 	}
 }
+
+func TestSpawnCancelledWhileQueuedCleansEmptyWorktree(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig()
+	pc := cfg.Providers["codex"]
+	pc.MaxParallel = 1
+	cfg.Providers["codex"] = pc
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseFirst) })
+
+	prov := &fakeProvider{
+		name: "codex",
+		handler: func(call int, ctx context.Context, req provider.RunRequest) (provider.Run, error) {
+			if call == 1 {
+				if err := os.WriteFile(filepath.Join(req.Dir, "a1.txt"), []byte("1\n"), 0o644); err != nil {
+					return nil, err
+				}
+				wt, _ := gitx.Open(req.Dir)
+				_, _ = wt.CommitAll(ctx, "a1")
+				sha, _ := wt.RevParse(ctx, "HEAD")
+				close(firstStarted)
+				select {
+				case <-releaseFirst:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				return newFakeRun("sid-q1", []string{`{"ok":1}`}, provider.Final{
+					Text:      receiptBlock("T1", "done", "a1.txt", []string{sha}, "echo ok"),
+					SessionID: "sid-q1",
+				}), nil
+			}
+			t.Fatalf("queued cancelled agent a2 should never start provider")
+			return nil, errors.New("unexpected")
+		},
+	}
+
+	eng, r, _ := setupPlanApprovedEngine(t, cfg, prov, nil)
+	a1, err := eng.Spawn(ctx, "T1", "", "", "", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-firstStarted
+
+	a2, err := eng.Spawn(ctx, "T2", "", "", "", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2State := eng.State().Agent(a2)
+	a2Worktree := a2State.Worktree
+	a2Branch := a2State.Branch
+
+	if err := eng.Cancel(a2); err != nil {
+		t.Fatal(err)
+	}
+	res2 := eng.Wait(ctx, []string{a2}, 10*time.Second)
+	if len(res2) != 1 || res2[0].Status != string(run.AgentCancelled) {
+		t.Fatalf("a2 Wait() = %+v, want cancelled", res2)
+	}
+
+	if _, err := os.Stat(a2Worktree); !os.IsNotExist(err) {
+		t.Fatalf("queued cancelled worktree %s still exists", a2Worktree)
+	}
+	if _, err := r.RevParse(ctx, "refs/heads/"+a2Branch); err == nil {
+		t.Fatalf("queued cancelled branch %s still exists", a2Branch)
+	}
+
+	releaseOnce.Do(func() { close(releaseFirst) })
+	res1 := eng.Wait(ctx, []string{a1}, 10*time.Second)
+	if len(res1) != 1 || res1[0].Verification == nil || !res1[0].Verification.Passed || len(res1[0].Verification.RefViolations) != 0 {
+		t.Fatalf("a1 failed after queued cancellation: %+v (ver=%+v)", res1[0], res1[0].Verification)
+	}
+}
+
+func TestSpawnUnknownProviderListsAvailable(t *testing.T) {
+	ctx := context.Background()
+	eng, _, _ := setupPlanApprovedEngine(t, testConfig(), &fakeProvider{name: "codex"}, nil)
+
+	_, err := eng.Spawn(ctx, "T1", "", "inexistente", "", "haz")
+	if err == nil {
+		t.Fatal("Spawn(inexistente) succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "codex") {
+		t.Fatalf("error = %q, want configured provider codex listed", err.Error())
+	}
+}

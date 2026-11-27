@@ -328,6 +328,83 @@ func TestResumeMarksInterrupted(t *testing.T) {
 	}
 }
 
+func TestResumeRecreatesMissingSessionWorktree(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	st := run.Store{Root: filepath.Join(r.Dir, ".weaver", "runs")}
+
+	eng1, err := New(ctx, Options{
+		Cfg:      testConfig(),
+		Repo:     r,
+		Store:    st,
+		Approver: &fakeApprover{approved: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := eng1.StartRun(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := eng1.RequestApproval(ctx, ApprovalRequest{Kind: "spec", Path: "docs/spec.md", Summary: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	sessRepo, err := gitx.Open(s.SessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.SessionDir, "persisted.txt"), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessRepo.CommitAll(ctx, "commit in session"); err != nil {
+		t.Fatal(err)
+	}
+	wantSHA, err := sessRepo.RevParse(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := s.SessionDir
+	runID := s.RunID
+
+	// Remove the worktree directory manually while keeping the integration branch.
+	if err := os.RemoveAll(sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sessionDir); !os.IsNotExist(err) {
+		t.Fatalf("expected sessionDir %s to be deleted", sessionDir)
+	}
+
+	eng2, err := New(ctx, Options{
+		Cfg:      testConfig(),
+		Repo:     r,
+		Store:    st,
+		Approver: &fakeApprover{approved: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng2.Close(ctx)
+
+	resumed, err := eng2.Resume(ctx, runID)
+	if err != nil {
+		t.Fatalf("Resume() error: %v", err)
+	}
+	if resumed.SessionDir != sessionDir {
+		t.Fatalf("SessionDir = %q, want %q", resumed.SessionDir, sessionDir)
+	}
+	recreated, err := gitx.Open(sessionDir)
+	if err != nil {
+		t.Fatalf("recreated SessionDir not a valid git worktree: %v", err)
+	}
+	gotSHA, err := recreated.RevParse(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSHA != wantSHA {
+		t.Fatalf("recreated HEAD = %s, want %s", gotSHA, wantSHA)
+	}
+}
+
 func TestCloseDeletesEmptyRun(t *testing.T) {
 	ctx := context.Background()
 	r := newTestRepo(t)

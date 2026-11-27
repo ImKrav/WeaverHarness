@@ -93,6 +93,16 @@ func (r Repo) AddWorktree(ctx context.Context, path, newBranch, base string) err
 	return err
 }
 
+// AttachWorktree attaches a git worktree at path to an existing branch, pruning stale worktree entries first.
+func (r Repo) AttachWorktree(ctx context.Context, path, existingBranch string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("gitx: mkdir worktree parent: %w", err)
+	}
+	_, _ = r.Run(ctx, "worktree", "prune")
+	_, err := r.Run(ctx, "worktree", "add", path, existingBranch)
+	return err
+}
+
 // RemoveWorktree forcefully removes the git worktree at path.
 func (r Repo) RemoveWorktree(ctx context.Context, path string) error {
 	_, err := r.Run(ctx, "worktree", "remove", "--force", path)

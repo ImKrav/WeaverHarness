@@ -15,6 +15,28 @@ func (e *Engine) RequestApproval(ctx context.Context, r ApprovalRequest) (bool, 
 		e.mu.Unlock()
 		return false, "", errors.New("engine: no hay ejecución activa")
 	}
+
+	if r.Kind == "spec" && e.state.Phase == run.PhaseIntegrated {
+		prevOrchSID := e.state.OrchestratorSessionID
+		e.mu.Unlock()
+
+		if _, err := e.StartRun(ctx); err != nil {
+			return false, "", err
+		}
+		if prevOrchSID != "" {
+			if err := e.SetOrchestratorSessionID(prevOrchSID); err != nil {
+				return false, "", err
+			}
+		}
+		e.notify(e.Status(""))
+
+		e.mu.Lock()
+		if e.state == nil {
+			e.mu.Unlock()
+			return false, "", errors.New("engine: la ejecución fue cerrada")
+		}
+	}
+
 	if err := e.state.CheckRequest(r.Kind); err != nil {
 		e.mu.Unlock()
 		return false, "", err
