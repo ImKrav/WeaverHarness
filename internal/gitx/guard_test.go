@@ -229,3 +229,68 @@ func TestGuardCheckExceptProtectsOtherWeaverBranches(t *testing.T) {
 		t.Fatalf("allowed weaver/run1-a2 = %s, want %s", gotA2, altSHA)
 	}
 }
+
+func TestGuardHandlesSymlinkedRepoPath(t *testing.T) {
+	base := t.TempDir()
+	realParent := filepath.Join(base, "real")
+	linkParent := filepath.Join(base, "link")
+	if err := os.MkdirAll(realParent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Skipf("symlinks no disponibles en este entorno: %v", err)
+	}
+
+	realRepoDir := filepath.Join(realParent, "repo")
+	if err := os.MkdirAll(realRepoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, realRepoDir, "init", "-b", "main")
+	runGit(t, realRepoDir, "config", "user.name", "Weaver Test")
+	runGit(t, realRepoDir, "config", "user.email", "weaver@example.com")
+	if err := os.WriteFile(filepath.Join(realRepoDir, "README.md"), []byte("init\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, realRepoDir, "add", "README.md")
+	runGit(t, realRepoDir, "commit", "-m", "initial")
+
+	linkRepo := Repo{Dir: filepath.Join(linkParent, "repo")}
+	wtReal := filepath.Join(realParent, "repo-weaver", "r1", "a1")
+	wtLink := filepath.Join(linkParent, "repo-weaver", "r1", "a1")
+
+	if !isUnderDir(wtReal, WeaverDir(linkRepo.Dir)) {
+		t.Fatalf("isUnderDir(%q, %q) = false, want true across symlinked parent", wtReal, WeaverDir(linkRepo.Dir))
+	}
+
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_ = linkRepo.RemoveWorktree(ctx, wtLink)
+		_ = os.RemoveAll(WeaverDir(realRepoDir))
+	})
+	if err := linkRepo.AddWorktree(ctx, wtLink, "weaver/r1/a1", "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := NewGuard(ctx, linkRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtRepo, err := Open(wtReal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtReal, "sym.txt"), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wtRepo.CommitAll(ctx, "commit via real path"); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := g.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check() error: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("Check() = %+v, want no violations for symlinked weaver worktree", violations)
+	}
+}

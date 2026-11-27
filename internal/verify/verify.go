@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"path/filepath"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -125,8 +125,8 @@ func compareChanges(ctx context.Context, in Input, branch string, v *Verificatio
 
 	receiptSet := make(map[string]bool, len(in.Receipt.Changes))
 	for _, ch := range in.Receipt.Changes {
-		p := filepath.ToSlash(strings.TrimPrefix(ch.Path, "./"))
-		if receiptSet[p] {
+		p := normalizeReceiptPath(ch.Path)
+		if p == "" || receiptSet[p] {
 			continue
 		}
 		receiptSet[p] = true
@@ -140,6 +140,16 @@ func compareChanges(ctx context.Context, in Input, branch string, v *Verificatio
 			v.OnlyInDiff = append(v.OnlyInDiff, p)
 		}
 	}
+}
+
+func normalizeReceiptPath(raw string) string {
+	p := strings.ReplaceAll(strings.TrimSpace(raw), `\`, `/`)
+	p = path.Clean(p)
+	p = strings.TrimPrefix(p, "./")
+	if p == "." {
+		return ""
+	}
+	return p
 }
 
 // Finalize updates Passed based on missing commits, check results, and ref violations.

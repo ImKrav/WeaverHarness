@@ -236,11 +236,40 @@ func takeSnapshot(ctx context.Context, r Repo) (Snapshot, error) {
 }
 
 func normPath(p string) string {
+	if p == "" {
+		return ""
+	}
 	clean := filepath.Clean(filepath.FromSlash(p))
+	if abs, err := filepath.Abs(clean); err == nil {
+		clean = abs
+	}
+	clean = evalSymlinksBestEffort(clean)
+	clean = filepath.Clean(clean)
 	if runtime.GOOS == "windows" {
 		return strings.ToLower(clean)
 	}
 	return clean
+}
+
+func evalSymlinksBestEffort(p string) string {
+	if realPath, err := filepath.EvalSymlinks(p); err == nil {
+		return realPath
+	}
+	var suffix []string
+	cur := p
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		suffix = append(suffix, filepath.Base(cur))
+		cur = parent
+		if realParent, err := filepath.EvalSymlinks(cur); err == nil {
+			slices.Reverse(suffix)
+			parts := append([]string{realParent}, suffix...)
+			return filepath.Join(parts...)
+		}
+	}
 }
 
 func isUnderDir(path, dir string) bool {

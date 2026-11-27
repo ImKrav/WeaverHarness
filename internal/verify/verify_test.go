@@ -264,3 +264,45 @@ func TestRunCheckTail(t *testing.T) {
 		t.Fatalf("tail did not preserve last 2000 bytes accurately")
 	}
 }
+
+func TestCompareChangesNormalizesBackslashesAndDotPrefix(t *testing.T) {
+	_, wt, _ := newWorktreeRepo(t)
+	ctx := context.Background()
+	subDir := filepath.Join(wt.Dir, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "file.go"), []byte("package sub\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	committed, err := wt.CommitAll(ctx, "add sub/file.go")
+	if err != nil || !committed {
+		t.Fatalf("CommitAll = (%v, %v)", committed, err)
+	}
+	sha, err := wt.RevParse(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	v := Verify(ctx, Input{
+		Worktree: wt,
+		Base:     "main",
+		Branch:   "weaver/r1/a1",
+		Receipt: receipt.Receipt{
+			TaskID:  "T1",
+			Status:  "done",
+			Summary: "ok",
+			Changes: []receipt.Change{
+				{Path: `.\hello.txt`, Kind: "added"},
+				{Path: `sub\file.go`, Kind: "added"},
+			},
+			Commits: []string{sha},
+		},
+		TaskChecks: []string{"echo ok"},
+		Timeout:    5 * time.Second,
+	})
+
+	if len(v.OnlyInReceipt) != 0 || len(v.OnlyInDiff) != 0 {
+		t.Fatalf("OnlyInReceipt=%v OnlyInDiff=%v, want both empty", v.OnlyInReceipt, v.OnlyInDiff)
+	}
+}
